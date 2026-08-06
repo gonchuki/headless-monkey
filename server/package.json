@@ -1,0 +1,27 @@
+{
+  "name": "server",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Express + better-sqlite3 API server for headless-monkey",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.2",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.2.2",
+    "tsx": "^4.23.8",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
