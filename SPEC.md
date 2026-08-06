@@ -1,5 +1,6 @@
-# SPEC: headless-monkey CMS (v0.2 — 2026-08-06)
+# SPEC: headless-monkey CMS (v0.3 — 2026-08-06)
 
+v0.3 — resolved build-plan decisions: required text must be non-empty; lossless value coercion on type change; referenced-schema delete blocked (409); SSE via fetch reader (§2 R16–R17, §5, §6)
 v0.2 — layout changed to a pnpm workspaces monorepo (`client/` and `server/` packages), §5 §8
 
 ## 1. Intent (binding)
@@ -28,8 +29,8 @@ Schema model & versioning
 - R15. Fields are referenced by stable numeric `field_id` everywhere (content rows, API payloads, SSE events), never by label. Renaming a label changes no stored data and does not invalidate content.
 
 Content & public API
-- R16. Creating an entry requires every required field to have a value valid for its type; violation returns 422. Unknown `field_id` returns 422. A `schema-ref` value must reference an existing entry id of the target schema; violation returns 422.
-- R17. Saving an entry sets its `schema_version` to the schema's current `version` (conflict is resolved by the edit itself).
+- R16. Creating an entry requires every required field to have a value valid for its type; a required `text` field must be non-empty. Violation returns 422. Unknown `field_id` returns 422. A `schema-ref` value must reference an existing entry id of the target schema; violation returns 422.
+- R17. Saving an entry sets its `schema_version` to the schema's current `version` (conflict is resolved by the edit itself). On save, values that coerce losslessly into a changed field type (only `number`→`text`) are carried over; values invalid for the new type must be re-entered.
 - R18. `GET /api/content/:schema` returns 200 with only valid entries (`schema_version >= compat_version`). Unknown schema returns 404.
 - R19. `GET /api/content/:schema/:id` returns 200 for a valid entry, 404 if the id does not exist, and 422 if the entry exists but is conflicted (`schema_version < compat_version`). Neither is ever returned together.
 - R20. The public data API is unauthenticated and stateless: R4's auth guard does not apply to it.
@@ -105,11 +106,11 @@ Value serialization in `content_rows.value` (JSON-encoded TEXT): text→string; 
 - Tests: vitest + supertest against an Express app factory (no listening server in tests). The DB is per-test and in-memory/file-temp.
 - One component per `.tsx` file. State via `useReducer`/query state; no `useEffect`+`useRef` indirection for data.
 - Circular `schema-ref` detection must hold across the full schema graph, not just direct neighbors.
-- ASSUMPTION: deleting a schema that is referenced by another schema's `schema-ref` field is blocked with 409 naming the referencing schema (prevents dangling refs). Veto if you prefer cascade.
+- Deleting a schema that is referenced by another schema's `schema-ref` field is blocked with 409 naming the referencing schema (prevents dangling refs).
 
 ## 6. Suggested approach (negotiable)
 
-If you have a better approach that satisfies §2–§5, propose it before coding. Otherwise: a `createApp()` factory composing routers over a shared sqlite connection; a migration runner; a small `SchemaService` (version/compat rules, cycle detection, propagation) and `ContentService`; JWT middleware; SSE fan-out via an in-memory `EventEmitter` keyed by schema name; client: react-router routes, query hooks per screen, a `useRealtime` hook that opens the SSE stream, invalidates the current schema's queries, and drives the transient disabled/banner/dual-field states + toasts.
+If you have a better approach that satisfies §2–§5, propose it before coding. Otherwise: a `createApp()` factory composing routers over a shared sqlite connection; a migration runner; a small `SchemaService` (version/compat rules, cycle detection, propagation) and `ContentService`; JWT middleware; SSE fan-out via an in-memory `EventEmitter` keyed by schema name; client: react-router routes, query hooks per screen, a `useRealtime` hook that opens the SSE stream via fetch (Bearer header — `EventSource` cannot set headers), invalidates the current schema's queries, and drives the transient disabled/banner/dual-field states + toasts.
 
 ## 7. Examples (binding where present)
 
