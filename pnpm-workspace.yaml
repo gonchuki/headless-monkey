@@ -3,5 +3,6 @@ packages:
   - server
 
 allowBuilds:
+  bcrypt: set this to true or false
   better-sqlite3: true
   esbuild: true
