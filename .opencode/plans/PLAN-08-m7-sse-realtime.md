@@ -14,7 +14,7 @@ SPEC §2 R23–R26; §4 SSE contract; §5 useRealtime/optimistic.
 ## Files involved
 
 - Server: `server/src/services/events.ts` (in-memory emitter), `server/src/routes/events.ts` (SSE endpoint), emit calls in `server/src/routes/schemas.ts` + `server/src/routes/entries.ts` (or their services), `server/src/app.ts` (mount, guarded).
-- Client: `client/src/hooks/useRealtime.ts`, `client/src/components/Toast.tsx`, and the disabled/banner states in `client/src/routes/SchemasPage.tsx`, `client/src/routes/ContentPage.tsx`, `client/src/routes/SchemaEditorPage.tsx`, `client/src/routes/ContentEditorPage.tsx`.
+- Client: `client/src/hooks/useRealtime.ts`, `client/src/components/Toast.tsx`, `<Alert />` banner + disabled states in `client/src/routes/SchemasPage.tsx`, `client/src/routes/ContentPage.tsx`, `client/src/routes/SchemaEditorPage.tsx`, `client/src/routes/ContentEditorPage.tsx`.
 
 ## Approach
 
@@ -22,9 +22,9 @@ SPEC §2 R23–R26; §4 SSE contract; §5 useRealtime/optimistic.
 2. **SSE endpoint:** `GET /api/events`, guarded by bearer auth. Since `EventSource` cannot set headers, the client reads this via `fetch` (Response body stream reader); the endpoint is a plain text/event-stream response. (Resolved decision #2.)
 3. **Emits:** every schema create/update/delete and entry create/update/delete mutation emits the corresponding event with the mutating user as `by`. For schema updates, compute the `changes` list here — there is no precomputed diff; build it by comparing old vs. new id-stable fields (per-kind: renamed, added, deleted, typeChanged, requiredChanged, reordered).
 4. **Client hook:** `useRealtime` opens the stream with the Bearer header, filters events to the schema(s) currently on screen, invalidates the affected TanStack queries, and exposes the events to the view layer. Handle reconnection and treat a mid-stream 401 as "logged out".
-5. **Toasts (R26):** a change by another user that affects the current view produces a toast (`Toast` component over the shadcn toast primitive).
+5. **Toasts (R26):** a change by another user that affects the current view produces a toast (`Toast` component over the shadcn toast primitive; SPEC §5 roles — notification = `<Toast />`, banner = `<Alert />`, confirmation = `<AlertDialog />`).
 6. **Transient states:**
-   - `schema.deleted` → open schema editor and entry editor render disabled with a banner; the row in schema/content listings is disabled and non-interactable (R24).
+   - `schema.deleted` → open schema editor and entry editor render disabled with an `<Alert />` banner; the row in schema/content listings is disabled and non-interactable (R24).
    - `schema.updated` with a `typeChanged` to an incompatible type while an entry of that schema is open → old field disabled with the new field below it (R25), pre-filled when the old value coerces losslessly (`number`→`text`, resolved decision #4).
 
 ## Edge cases
@@ -42,7 +42,7 @@ SPEC §2 R23–R26; §4 SSE contract; §5 useRealtime/optimistic.
 1. `pnpm --filter server test` passes and `pnpm --filter client build` passes.
 2. Server test: calling `GET /api/events` without a token → 401 (R4 applies to it).
 3. Two-browser manual: A creates a schema → B sees a toast and the list updates without a manual refresh (R26, R23).
-4. Two-browser manual: A deletes the schema → B's open schema/entry editor is disabled with a banner and the listing rows are disabled (R24).
+4. Two-browser manual: A deletes the schema → B's open schema/entry editor is disabled with an `<Alert />` banner and the listing rows are disabled (R24).
 5. Two-browser manual: A changes a field to an incompatible type → B's open entry for that schema shows the old field disabled and the new field below, pre-filled when the value coerces losslessly (R25).
 
-Milestone M7 verify gate (preserved): `pnpm --filter server test` and `pnpm --filter client build` pass; two-browser manual: A creates a schema → B sees toast + list update; A deletes the schema → B's open editor disabled + banner; A changes a field type → B's open entry shows the dual-field editor.
+Milestone M7 verify gate (preserved): `pnpm --filter server test` and `pnpm --filter client build` pass; two-browser manual: A creates a schema → B sees toast + list update; A deletes the schema → B's open editor disabled + `<Alert />` banner; A changes a field type → B's open entry shows the dual-field editor.

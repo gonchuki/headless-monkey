@@ -9,7 +9,7 @@ Admin and editor log in and land on role-appropriate screens; all data access fl
 
 ## Spec refs (verbatim from milestone M4)
 
-SPEC §2 R27, R28, R29; §5 react-router SPA, tanstack, shadcn/base-ui, phosphor, one component per `.tsx`.
+SPEC §2 R27, R28, R29; §5 react-router SPA, tanstack, shadcn/ui, phosphor, one component per `.tsx`.
 
 ## Files involved
 
@@ -19,8 +19,8 @@ SPEC §2 R27, R28, R29; §5 react-router SPA, tanstack, shadcn/base-ui, phosphor
 - `client/src/auth/AuthProvider.tsx`, `client/src/auth/RequireRole.tsx`
 - `client/src/routes/LoginPage.tsx`, `client/src/routes/AdminUsersPage.tsx`
 - `client/src/layouts/AppLayout.tsx`, `client/src/components/Nav.tsx`, `client/src/components/Skeleton.tsx`
-- `client/src/components/ui/*` — shadcn primitives (button, input, alert, toast).
-- `client/package.json` — add `@base-ui/react`, `@phosphor-icons/react`, and Tailwind/PostCSS tooling.
+- `client/src/components/ui/*` — shadcn primitives (button, input, alert, alert-dialog, toast).
+- `client/package.json` — add `@phosphor-icons/react`, and Tailwind/PostCSS tooling (shadcn/ui brings `@base-ui/react` in as its default primitive dependency).
 - `client/components.json`, Tailwind/PostCSS config.
 
 ## Approach
@@ -31,7 +31,7 @@ SPEC §2 R27, R28, R29; §5 react-router SPA, tanstack, shadcn/base-ui, phosphor
 4. **Login page:** login/password form → `POST /api/auth/login` → store token → navigate by role.
 5. **Admin users page (`/admin`):** list editors, create editor (login + password), toggle `disabled`, delete — all as optimistic TanStack mutations with skeletons during first load (R27, R28).
 6. **Layout/nav:** `AppLayout` + `Nav` with role-filtered links (admin: `/admin` only; editor: schemas/content). `Skeleton` component used for pure loading states.
-7. **UI kit:** configure shadcn/ui; primitives MUST come from `@base-ui/react` (never Radix) — if the shadcn CLI only offers Radix variants, hand-write thin components over base-ui primitives. Add `@phosphor-icons/react`. Install the primitives actually used (button, input, alert, toast) plus whatever the pages need.
+7. **UI kit:** install shadcn/ui components via the shadcn CLI (`shadcn@latest` defaults to `@base-ui/react` primitives — no Radix). Use shadcn components for everything they cover; only hand-write thin components over raw base-ui primitives when no shadcn implementation exists. Add `@phosphor-icons/react`. Install the primitives actually used (button, input, alert, alert-dialog, toast) plus whatever the pages need. Component roles per SPEC §5: confirmations → `<AlertDialog />`; passive banners → `<Alert />`; notifications → `<Toast />`.
 
 ## Edge cases
 

@@ -63,15 +63,15 @@
 ## M4 — Client shell + auth (client)
 
 - **Goal:** Admin and editor log in and land on role-appropriate screens; all data flows through TanStack Query with skeleton loading.
-- **Spec refs:** SPEC §2 R27, R28, R29; §5 react-router SPA, tanstack, shadcn/base-ui, phosphor, one component per `.tsx`.
-- **File scope:** `client/src/main.tsx`, `client/src/lib/api.ts`, `client/src/lib/query.ts`, `client/src/auth/AuthProvider.tsx`, `client/src/auth/RequireRole.tsx`, `client/src/routes/LoginPage.tsx`, `client/src/routes/AdminUsersPage.tsx`, `client/src/layouts/AppLayout.tsx`, `client/src/components/Nav.tsx`, `client/src/components/Skeleton.tsx`, `client/src/components/ui/` (shadcn button, input, alert, toast), `client/components.json` + tailwind/css config.
+- **Spec refs:** SPEC §2 R27, R28, R29; §5 react-router SPA, tanstack, shadcn/ui, phosphor, one component per `.tsx`.
+- **File scope:** `client/src/main.tsx`, `client/src/lib/api.ts`, `client/src/lib/query.ts`, `client/src/auth/AuthProvider.tsx`, `client/src/auth/RequireRole.tsx`, `client/src/routes/LoginPage.tsx`, `client/src/routes/AdminUsersPage.tsx`, `client/src/layouts/AppLayout.tsx`, `client/src/components/Nav.tsx`, `client/src/components/Skeleton.tsx`, `client/src/components/ui/` (shadcn button, input, alert, alert-dialog, toast), `client/components.json` + tailwind/css config.
 - **Depends on:** M2.
 - **Steps:**
   1. Router with R29 paths, `QueryClientProvider`, api client attaching Bearer from storage.
   2. `AuthProvider` (login/logout/me + token persistence); `RequireRole` guards: admin → only `/admin`, editor → only CMS routes (R29).
   3. Login page (login/password); `/admin` users page: list, create editor, toggle disabled, delete — optimistic updates + skeletons (R27, R28).
   4. `AppLayout` + nav with role-filtered links; skeleton component.
-  5. Install/configure shadcn/ui on base-ui + `@phosphor-icons/react`; add the ui primitives above.
+  5. Install/configure shadcn/ui (defaults to `@base-ui/react` primitives) + `@phosphor-icons/react`; add the ui primitives above.
 - **Verify:** `pnpm --filter client build` passes; manual against running M2 server: admin login → `/admin` only; editor login → CMS only; disabled editor rejected at login; users CRUD reflects immediately.
 - **Out of scope:** schema/content screens (M5/M6), realtime (M7).
 
@@ -79,13 +79,13 @@
 
 - **Goal:** Editor lists schemas and builds/edits one in a 3-column sortable grid, with confirmed deletes showing affected counts.
 - **Spec refs:** SPEC §2 R30; §2 R22 (confirmations + affected counts); §4 schema routes; §5 optimistic updates/skeletons.
-- **File scope:** `client/src/routes/SchemasPage.tsx`, `client/src/routes/SchemaEditorPage.tsx`, `client/src/hooks/useSchemas.ts`, `client/src/components/SchemaFieldGrid.tsx`, `client/src/components/SchemaFieldRow.tsx`, `client/src/components/DeleteConfirmDialog.tsx`, `client/src/components/NewEntrySelector.tsx`, `client/src/components/ui/Alert.tsx`.
+- **File scope:** `client/src/routes/SchemasPage.tsx`, `client/src/routes/SchemaEditorPage.tsx`, `client/src/hooks/useSchemas.ts`, `client/src/components/SchemaFieldGrid.tsx`, `client/src/components/SchemaFieldRow.tsx`, `client/src/components/DeleteConfirmDialog.tsx`, `client/src/components/NewEntrySelector.tsx`, `client/src/components/ui/AlertDialog.tsx` (delete confirmations).
 - **Depends on:** M4, M3.
 - **Steps:**
   1. Schemas list page (skeletons, optimistic delete).
   2. Schema editor: name field + 3-col grid `field_label | field_type | required` (R30), add/remove rows, reorder (up/down/drag), type select, ref_schema select for `schema-ref`.
   3. Save → `PATCH` with id-stable fields (renames keep `id`, new fields omit it); display resulting version; surface 409/422 inline.
-  4. Delete confirmations: schema delete shows affected content count, field delete shows affected entry count (R22); deleted schemas render disabled in the list.
+  4. Delete confirmations via `<AlertDialog />`: schema delete shows affected content count, field delete shows affected entry count (R22); deleted schemas render disabled in the list.
   5. `NewEntrySelector` (disabled when zero schemas) for M6.
 - **Verify:** `pnpm --filter client build`; manual against running server: create schema → listed; rename/reorder/optional-add → version +1 with compat unchanged; delete warns with correct counts.
 - **Out of scope:** content editor (M6), realtime (M7).
@@ -110,15 +110,15 @@
 
 - **Goal:** Two logged-in editors observe each other's changes live: toasts on affected views, disabled rows/banners on deletion, dual-field render on incompatible type change.
 - **Spec refs:** SPEC §2 R23–R26; §4 SSE contract; §5 useRealtime/optimistic.
-- **File scope:** server `server/src/services/events.ts`, `server/src/routes/events.ts`, emit calls in `routes/schemas.ts` + `routes/entries.ts`, `server/src/app.ts` (mount + keep guarded); client `client/src/hooks/useRealtime.ts`, `client/src/components/Toast.tsx`, disabled/banner states in `SchemasPage.tsx`, `ContentPage.tsx`, `SchemaEditorPage.tsx`, `ContentEditorPage.tsx`.
+- **File scope:** server `server/src/services/events.ts`, `server/src/routes/events.ts`, emit calls in `routes/schemas.ts` + `routes/entries.ts`, `server/src/app.ts` (mount + keep guarded); client `client/src/hooks/useRealtime.ts`, `client/src/components/Toast.tsx`, `<Alert />` banner + disabled states in `SchemasPage.tsx`, `ContentPage.tsx`, `SchemaEditorPage.tsx`, `ContentEditorPage.tsx`.
 - **Depends on:** M6 (editors to modify), M3 (emit from content mutations).
 - **Steps:**
   1. Server event emitter (in-memory, per schema) + `GET /api/events` (Bearer) streaming `schema.created|updated|deleted`, `entry.created|updated|deleted` with `changes` payloads per §4.
   2. Emit from every schema create/update/delete and entry create/update/delete mutation.
   3. Client `useRealtime` hook per SPEC §6: fetch-based SSE reader (Bearer header), subscribes to the schema(s) on screen, invalidates affected queries.
-  4. Toast on events affecting the current view (R26).
-  5. Transient states: schema deleted → open schema/entry editors disabled + banner, listing rows disabled (R24); incompatible `typeChanged` → old field disabled with new field below (R25), pre-filled when the old value coerces losslessly (`number`→`text`).
-- **Verify:** `pnpm --filter server test` and `pnpm --filter client build` pass; two-browser manual: A creates a schema → B sees toast + list update; A deletes the schema → B's open editor disabled + banner; A changes a field type → B's open entry shows the dual-field editor.
+  4. `<Toast />` on events affecting the current view (R26).
+  5. Transient states: schema deleted → open schema/entry editors disabled + `<Alert />` banner, listing rows disabled (R24); incompatible `typeChanged` → old field disabled with new field below (R25), pre-filled when the old value coerces losslessly (`number`→`text`).
+- **Verify:** `pnpm --filter server test` and `pnpm --filter client build` pass; two-browser manual: A creates a schema → B sees toast + list update; A deletes the schema → B's open editor disabled + `<Alert />` banner; A changes a field type → B's open entry shows the dual-field editor.
 - **Out of scope:** OT/collision merging, presence indicators, offline queueing.
 
 ## Resolved decisions

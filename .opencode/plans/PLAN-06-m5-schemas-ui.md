@@ -18,14 +18,14 @@ SPEC §2 R30; §2 R22 (confirmations + affected counts); §4 schema routes; §5 
 - `client/src/components/SchemaFieldGrid.tsx`, `client/src/components/SchemaFieldRow.tsx`
 - `client/src/components/DeleteConfirmDialog.tsx`
 - `client/src/components/NewEntrySelector.tsx`
-- `client/src/components/ui/Alert.tsx` (+ any primitives the dialogs need, over base-ui)
+- `client/src/components/ui/AlertDialog.tsx` (delete confirmations; `<Alert />` is the passive banner, not a confirmation — SPEC §5)
 
 ## Approach
 
 1. **List page:** `SchemasPage` — skeletons on first load (R28), optimistic delete, deleted-schema rows render disabled.
 2. **Editor page:** `SchemaEditorPage` — schema name (editable only when the schema has no entries yet; read-only otherwise), plus the 3-column sortable grid: `field_label` (text input) | `field_type` (select of text/number/boolean/date/schema-ref) | `required` (checkbox) (R30). Reorder rows (move up/down or drag); when type is `schema-ref`, show a `ref_schema` select.
 3. **Save:** `PATCH` with the id-stable `fields` shape from SPEC §4 — existing fields carry their `id`, new fields omit it, absent ids are deleted (R15). On save success, surface the new `version`. Inline 409/422 errors (duplicate labels, invalid ref, cycle) from the server.
-4. **Confirmations:** `DeleteConfirmDialog` — deleting a schema warns with the affected content count (R22); deleting a *field* warns with the affected entry count, because that field's data propagates away (R21). Show the server's 409 message when a referenced schema cannot be deleted.
+4. **Confirmations:** `DeleteConfirmDialog` (built on shadcn `<AlertDialog />`) — deleting a schema warns with the affected content count (R22); deleting a *field* warns with the affected entry count, because that field's data propagates away (R21). Show the server's 409 message when a referenced schema cannot be deleted.
 5. **New-entry selector:** `NewEntrySelector` — lists schemas, disabled when zero schemas exist (used by the content flow in PLAN-07; `POST /api/schemas/:name/entries` needs it later).
 6. **Hooks:** `useSchemas` encapsulates list/create/update/delete with optimistic updates and query invalidation (R27).
 

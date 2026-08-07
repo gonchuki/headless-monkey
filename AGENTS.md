@@ -5,7 +5,7 @@ Engineering conventions for this repository. The functional spec is `SPEC.md`; d
 ## Stack
 
 - pnpm workspaces monorepo. `server/` = Express + better-sqlite3 + TypeScript (strict). `client/` = Vite + React 19 + TypeScript (strict), `react-router@7` in SPA mode. Root `pnpm-workspace.yaml` lists both; the root `package.json` (private) only fans out to the packages.
-- UI components: shadcn/ui built on `@base-ui` primitives. Never use Radix.
+- UI components: shadcn/ui is the component library (`@base-ui/react` is shadcn's underlying primitive set by default). Use shadcn components for everything they cover; reach for raw base-ui primitives only when no shadcn implementation exists. Never use Radix.
 - Icons: `@phosphor-icons/react`. Never use lucide-react.
 - All data access: `@tanstack/react-query`.
 

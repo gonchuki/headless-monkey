@@ -1,5 +1,6 @@
-# SPEC: headless-monkey CMS (v0.3 — 2026-08-06)
+# SPEC: headless-monkey CMS (v0.4 — 2026-08-06)
 
+v0.4 — corrected UI component mapping: user confirmations use `<AlertDialog />`; `<Alert />` is the passive banner; `<Toast />` is the notification toast (§2 R22, R24, R26; §5)
 v0.3 — resolved build-plan decisions: required text must be non-empty; lossless value coercion on type change; referenced-schema delete blocked (409); SSE via fetch reader (§2 R16–R17, §5, §6)
 v0.2 — layout changed to a pnpm workspaces monorepo (`client/` and `server/` packages), §5 §8
 
@@ -35,13 +36,13 @@ Content & public API
 - R19. `GET /api/content/:schema/:id` returns 200 for a valid entry, 404 if the id does not exist, and 422 if the entry exists but is conflicted (`schema_version < compat_version`). Neither is ever returned together.
 - R20. The public data API is unauthenticated and stateless: R4's auth guard does not apply to it.
 - R21. Deleting a field propagates: that field's `content_rows` are removed from every entry of the schema, and each surviving entry's `schema_version` is set to the schema's current `version`.
-- R22. Deleting a schema cascades: its fields and all its content (rows included) are deleted. No content can exist without its schema.
+- R22. Deleting a schema cascades: its fields and all its content (rows included) are deleted. No content can exist without its schema. The delete confirmation (`<AlertDialog />`) warns with the affected content count before the cascade.
 
 Multi-user (SSE)
 - R23. `GET /api/events` (Bearer auth) streams SSE. Events: `schema.created`, `schema.updated` (with a `changes` list), `schema.deleted`, `entry.created`, `entry.updated`, `entry.deleted`.
-- R24. When a `schema.deleted` arrives for the schema currently on screen: schema editor and entry editor render disabled with a banner; the row in schema/content listings is disabled and not interactable.
+- R24. When a `schema.deleted` arrives for the schema currently on screen: schema editor and entry editor render disabled with an `<Alert />` banner; the row in schema/content listings is disabled and not interactable.
 - R25. When a `schema.updated` changes a field's type to an incompatible type (a `typeChanged` change) while an entry of that schema is open in the editor, the old field renders disabled with the newly-typed empty field right below it.
-- R26. A change by another user that affects the current view produces a toast on screen.
+- R26. A change by another user that affects the current view produces a `<Toast />` on screen.
 
 Client
 - R27. All data access uses `@tanstack/react-query`. Raw `fetch` inside `useEffect` is forbidden.
@@ -101,7 +102,8 @@ Value serialization in `content_rows.value` (JSON-encoded TEXT): text→string; 
 ## 5. Constraints & invariants (binding)
 
 - pnpm workspaces monorepo. `pnpm-workspace.yaml` lists `server/` (Express + better-sqlite3 + vitest) and `client/` (Vite + React + TypeScript strict), each with its own `package.json`; the root `package.json` is private and only fans out dev/test/build across the packages. Dev: Vite proxies `/api` to the server. `.env` at repo root (loaded explicitly by the server package): `ADMIN_PASSWORD`, `JWT_SECRET`, `PORT`, `DATABASE_PATH`.
-- React 19; `react-router@7` in SPA mode; shadcn/ui components built on `@base-ui` primitives (not Radix); `@phosphor-icons/react` for icons (never lucide-react); `@tanstack/react-query` for all data.
+- React 19; `react-router@7` in SPA mode; shadcn/ui for UI components (`@base-ui/react` is shadcn's underlying primitive set by default — use shadcn components; reach for raw base-ui primitives only when shadcn has no implementation; never Radix); `@phosphor-icons/react` for icons (never lucide-react); `@tanstack/react-query` for all data.
+- shadcn/ui component roles (binding): user confirmations (e.g. delete warnings, R22) use `<AlertDialog />`; passive banner states (e.g. disabled-on-delete, R24) use `<Alert />`; transient notifications (R26) use `<Toast />`.
 - Server: TypeScript strict, no ORM — a sequential SQL migration runner plus thin repositories. Password hashing with bcrypt, cost 10.
 - Tests: vitest + supertest against an Express app factory (no listening server in tests). The DB is per-test and in-memory/file-temp.
 - One component per `.tsx` file. State via `useReducer`/query state; no `useEffect`+`useRef` indirection for data.
@@ -138,9 +140,9 @@ Serialization: `values: { "12": "Civic", "13": 2019, "14": true, "15": "2021-05-
 - M3 — Auth + users: login/logout/me, JWT middleware, users CRUD (R1–R7). Verify: vitest covers R1–R7.
 - M4 — Content + public API: entry create/edit/delete, validation R16–R17, propagation R21, public routes R18–R20. Verify: vitest covers R16–R20 and serialization examples in §7.
 - M5 — Client shell + auth: routes R29, login screen, `/admin` users screen, route guards, nav. Verify: admin reaches only `/admin`; editor reaches only CMS; login/logout work against M3.
-- M6 — Schemas UI: listing, 3-column sortable editor R30, delete confirmations with affected counts (R22), schema selector for new content (disabled with zero schemas). Verify: R29–R30 and R22's confirmation flows work end-to-end.
+- M6 — Schemas UI: listing, 3-column sortable editor R30, delete confirmations via `<AlertDialog />` with affected counts (R22), schema selector for new content (disabled with zero schemas). Verify: R29–R30 and R22's confirmation flows work end-to-end.
 - M7 — Content UI: listing with edit buttons + conflict highlighting, dynamic 2-column editor R31–R32, conflicted-entry dual rendering R33, skeletons/optimistic updates R27–R28. Verify: create/edit/delete content against a schema by hand.
-- M8 — SSE realtime: `GET /api/events`, client `useRealtime`, disabled rows/banners/dual-fields R24–R25, toasts R26. Verify: two browser sessions against one server reproduce R23–R26.
+- M8 — SSE realtime: `GET /api/events`, client `useRealtime`, disabled rows/`<Alert />` banners/dual-fields R24–R25, `<Toast />` notifications R26. Verify: two browser sessions against one server reproduce R23–R26.
 
 ## 9. Review protocol
 
