@@ -18,6 +18,7 @@ export interface SchemaFieldRowProps {
   index: number;
   total: number;
   refSchemas: string[];
+  disabled?: boolean;
   onChange: (index: number, patch: Partial<Omit<SchemaDraft, "id">>) => void;
   onRemove: (index: number) => void;
   onMoveUp: (index: number) => void;
@@ -29,6 +30,7 @@ export function SchemaFieldRow({
   index,
   total,
   refSchemas,
+  disabled = false,
   onChange,
   onRemove,
   onMoveUp,
@@ -41,11 +43,12 @@ export function SchemaFieldRow({
       <div className="grid grid-cols-[minmax(0,1fr)_7.5rem_auto_auto] items-center gap-2">
         <Input
           value={field.label}
+          disabled={disabled}
           onChange={(event) => onChange(index, { label: event.target.value })}
           aria-label={`Field ${index + 1} label`}
           placeholder="Field label"
         />
-        <Select value={field.type} onValueChange={(value) => onChange(index, { type: value as FieldType })}>
+        <Select value={field.type} disabled={disabled} onValueChange={(value) => onChange(index, { type: value as FieldType })}>
           <SelectTrigger aria-label={`Field ${index + 1} type`}>
             <SelectValue />
           </SelectTrigger>
@@ -59,6 +62,7 @@ export function SchemaFieldRow({
         </Select>
         <Checkbox
           checked={field.required}
+          disabled={disabled}
           onCheckedChange={(checked) => onChange(index, { required: checked })}
           aria-label={`Field ${index + 1} required`}
         />
@@ -67,7 +71,7 @@ export function SchemaFieldRow({
             type="button"
             variant="ghost"
             size="icon-sm"
-            disabled={index === 0}
+            disabled={disabled || index === 0}
             onClick={() => onMoveUp(index)}
             aria-label={`Move field ${index + 1} up`}
           >
@@ -77,7 +81,7 @@ export function SchemaFieldRow({
             type="button"
             variant="ghost"
             size="icon-sm"
-            disabled={isLast}
+            disabled={disabled || isLast}
             onClick={() => onMoveDown(index)}
             aria-label={`Move field ${index + 1} down`}
           >
@@ -87,6 +91,7 @@ export function SchemaFieldRow({
             type="button"
             variant="ghost"
             size="icon-sm"
+            disabled={disabled}
             onClick={() => onRemove(index)}
             aria-label={`Delete field ${index + 1}`}
           >
@@ -99,6 +104,7 @@ export function SchemaFieldRow({
           <Label htmlFor={`field-${index}-ref`}>Referenced schema</Label>
           <Select
             value={field.ref_schema ?? null}
+            disabled={disabled}
             onValueChange={(value) => onChange(index, { ref_schema: typeof value === "string" ? value : undefined })}
           >
             <SelectTrigger id={`field-${index}-ref`}>

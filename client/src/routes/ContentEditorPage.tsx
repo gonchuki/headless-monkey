@@ -7,6 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { useEntries } from "@/hooks/useEntries";
+import { useRealtime } from "@/hooks/useRealtime";
 import { apiFetch, type SchemaEntry } from "@/lib/api";
 import { deriveInitialValues } from "@/lib/entries";
 import { queryKeys } from "@/lib/query";
@@ -26,6 +27,10 @@ export default function ContentEditorPage() {
   });
 
   const { listQuery, update } = useEntries(schemaName);
+
+  // Live stream: both schema and entry events affect the open entry.
+  const { deletedSchemas } = useRealtime({ schemas: [schemaName] });
+  const schemaDeleted = deletedSchemas.has(schemaName);
 
   if (schemaQuery.isPending || listQuery.isPending) {
     return <PageSkeleton />;
@@ -111,6 +116,15 @@ export default function ContentEditorPage() {
         </Alert>
       )}
 
+      {schemaDeleted && (
+        <Alert>
+          <AlertTitle>This schema was deleted</AlertTitle>
+          <AlertDescription>
+            {schemaName} was deleted by another editor. This entry can no longer be edited.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <DynamicEntryForm
         schema={schema}
         initialValues={initialValues}
@@ -120,6 +134,7 @@ export default function ContentEditorPage() {
         submitLabel={entry.conflict ? "Resolve & save" : "Save changes"}
         pending={update.isPending}
         submitError={update.isError ? errorMessage(update.error) : null}
+        disabled={schemaDeleted}
         onSubmit={handleSubmit}
       />
     </div>

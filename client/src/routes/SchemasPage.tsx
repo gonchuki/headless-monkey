@@ -6,8 +6,10 @@ import { Skeleton } from "@/components/Skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
+import { useRealtime } from "@/hooks/useRealtime";
 import { useSchemaEntryCount, useSchemas } from "@/hooks/useSchemas";
 import { type SchemaEntry } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 function errorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
@@ -17,6 +19,9 @@ export default function SchemasPage() {
   const navigate = useNavigate();
   const { listQuery, remove } = useSchemas();
   const [schemaToDelete, setSchemaToDelete] = useState<SchemaEntry | null>(null);
+
+  // Live stream: entry events don't affect this view; schema events do.
+  const { deletedSchemas } = useRealtime({ schemas: [], includeEntries: false });
 
   const affectedCount = useSchemaEntryCount(schemaToDelete?.name ?? "", schemaToDelete != null);
   const schemas = listQuery.data ?? [];
@@ -76,29 +81,40 @@ export default function SchemasPage() {
 
       {listQuery.isSuccess && schemas.length > 0 && (
         <ul className="divide-y overflow-hidden rounded-xl border bg-card">
-          {schemas.map((schema) => (
-            <li key={schema.name} className="flex items-center justify-between gap-3 p-3">
-              <button
-                type="button"
-                className="min-w-0 flex-1 text-left"
-                onClick={() => navigate(`/schemas/${encodeURIComponent(schema.name)}`)}
+          {schemas.map((schema) => {
+            const deleted = deletedSchemas.has(schema.name);
+            return (
+              <li
+                key={schema.name}
+                className={cn(
+                  "flex items-center justify-between gap-3 p-3",
+                  deleted && "pointer-events-none opacity-50",
+                )}
               >
-                <p className="truncate text-sm font-medium">{schema.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  v{schema.version} · {schema.fields.length} {schema.fields.length === 1 ? "field" : "fields"}
-                </p>
-              </button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Delete ${schema.name}`}
-                onClick={() => setSchemaToDelete(schema)}
-              >
-                <Trash className="size-4" aria-hidden="true" />
-              </Button>
-            </li>
-          ))}
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  disabled={deleted}
+                  onClick={() => navigate(`/schemas/${encodeURIComponent(schema.name)}`)}
+                >
+                  <p className="truncate text-sm font-medium">{schema.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    v{schema.version} · {schema.fields.length} {schema.fields.length === 1 ? "field" : "fields"}
+                  </p>
+                </button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Delete ${schema.name}`}
+                  disabled={deleted}
+                  onClick={() => setSchemaToDelete(schema)}
+                >
+                  <Trash className="size-4" aria-hidden="true" />
+                </Button>
+              </li>
+            );
+          })}
         </ul>
       )}
 

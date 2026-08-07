@@ -55,6 +55,7 @@ export interface DynamicEntryFormProps {
   submitLabel: string;
   pending?: boolean;
   submitError?: string | null;
+  disabled?: boolean;
   onSubmit: (values: EntryValues) => void;
 }
 
@@ -67,6 +68,7 @@ export function DynamicEntryForm({
   submitLabel,
   pending = false,
   submitError = null,
+  disabled = false,
   onSubmit,
 }: DynamicEntryFormProps) {
   const [state, dispatch] = useReducer(entryFormReducer, { values: initialValues });
@@ -125,6 +127,7 @@ export function DynamicEntryForm({
                     storedValue={stored}
                     newValue={state.values[id] ?? null}
                     error={error}
+                    disabled={disabled}
                     onChange={(value) => setValue(id, value)}
                   />
                 ) : (
@@ -132,6 +135,7 @@ export function DynamicEntryForm({
                     <EntryFieldInput
                       field={field}
                       value={state.values[id] ?? null}
+                      disabled={disabled}
                       invalid={Boolean(error)}
                       onChange={(value) => setValue(id, value)}
                     />
@@ -151,7 +155,7 @@ export function DynamicEntryForm({
         </Alert>
       )}
 
-      <Button type="button" disabled={pending} onClick={handleSubmit}>
+      <Button type="button" disabled={pending || disabled} onClick={handleSubmit}>
         {pending ? "Saving…" : submitLabel}
       </Button>
     </div>

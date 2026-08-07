@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import type { ContentService } from "../services/contentService";
+import type { EventsEmitter } from "../services/events";
 import type { AuthRequest } from "../auth/requireAuth";
 
 interface ServiceError {
@@ -19,7 +20,10 @@ function handleError(res: Response, err: unknown): void {
   }
 }
 
-export function createEntriesRouter(contentService: ContentService): Router {
+export function createEntriesRouter(
+  contentService: ContentService,
+  emitter?: EventsEmitter
+): Router {
   const router: Router = Router({ mergeParams: true });
 
   // Mounted at /api/schemas/:name/entries
@@ -39,6 +43,12 @@ export function createEntriesRouter(contentService: ContentService): Router {
       const values = req.body.values ?? {};
       const user = (req as AuthRequest).user.login;
       const entry = contentService.create(name, values, user);
+      emitter?.emit({
+        type: "entry.created",
+        schema: entry.schema,
+        entryId: entry.id,
+        by: user,
+      });
       res.status(201).json(entry);
     } catch (err) {
       handleError(res, err);
@@ -52,6 +62,12 @@ export function createEntriesRouter(contentService: ContentService): Router {
       const values = req.body.values ?? {};
       const user = (req as AuthRequest).user.login;
       const entry = contentService.update(id, values, user);
+      emitter?.emit({
+        type: "entry.updated",
+        schema: entry.schema,
+        entryId: entry.id,
+        by: user,
+      });
       res.json(entry);
     } catch (err) {
       handleError(res, err);
@@ -61,7 +77,17 @@ export function createEntriesRouter(contentService: ContentService): Router {
   router.delete("/:id", (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
+      const user = (req as AuthRequest).user.login;
+      const existing = contentService.getEntryMeta(id);
       contentService.delete(id);
+      if (existing) {
+        emitter?.emit({
+          type: "entry.deleted",
+          schema: existing.schema,
+          entryId: existing.id,
+          by: user,
+        });
+      }
       res.status(204).send();
     } catch (err) {
       handleError(res, err);

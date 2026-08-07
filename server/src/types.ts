@@ -9,6 +9,7 @@ export interface FieldInput {
 
 export interface FieldWithId extends FieldInput {
   id: number;
+  sort_order: number;
 }
 
 export interface SchemaCreateInput {

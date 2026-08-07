@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/toast";
+import { useRealtime } from "@/hooks/useRealtime";
 import { useSchemaEntryCount, useSchemas, type SchemaDraft } from "@/hooks/useSchemas";
 import { apiFetch, type SchemaEntry, type SchemaFieldInput } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
@@ -113,8 +114,16 @@ export default function SchemaEditorPage() {
   const [state, dispatch] = useReducer(editorReducer, initialState);
   const [fieldToDelete, setFieldToDelete] = useState<number | null>(null);
 
+  // Live stream: only schema events affect the schema editor view.
+  const { deletedSchemas } = useRealtime({
+    schemas: isCreateRoute ? [] : [name],
+    includeEntries: false,
+    enabled: !isCreateRoute,
+  });
+
   const isCreate = isCreateRoute;
   const schemaMissing = !isCreateRoute && schemaQuery.isError;
+  const deleted = !isCreateRoute && deletedSchemas.has(name);
 
   useEffect(() => {
     dispatch({ type: "RESET", name: isCreateRoute ? "" : name });
@@ -216,7 +225,7 @@ export default function SchemaEditorPage() {
     );
   }
 
-  const canSave = state.fields.length === 0 || (isCreate && state.name.trim() === "") || pending;
+  const canSave = state.fields.length === 0 || (isCreate && state.name.trim() === "") || pending || deleted;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -247,12 +256,22 @@ export default function SchemaEditorPage() {
         </Alert>
       )}
 
+      {deleted && (
+        <Alert>
+          <AlertTitle>This schema was deleted</AlertTitle>
+          <AlertDescription>
+            {name} was deleted by another editor. It can no longer be edited.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="grid gap-1.5">
         <Label htmlFor="schema-name">Schema name</Label>
         <Input
           id="schema-name"
           value={state.name}
           readOnly={!isCreate}
+          disabled={deleted}
           onChange={(event) => dispatch({ type: "SET_NAME", name: event.target.value })}
           placeholder="e.g. article"
         />
@@ -262,6 +281,7 @@ export default function SchemaEditorPage() {
       <SchemaFieldGrid
         fields={state.fields}
         refSchemas={refSchemas}
+        disabled={deleted}
         onFieldChange={handleFieldChange}
         onAddField={() => dispatch({ type: "ADD_FIELD" })}
         onRemoveField={setFieldToDelete}

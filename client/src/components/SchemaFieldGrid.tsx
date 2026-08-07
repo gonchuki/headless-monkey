@@ -6,6 +6,7 @@ import type { SchemaDraft } from "@/hooks/useSchemas";
 export interface SchemaFieldGridProps {
   fields: SchemaDraft[];
   refSchemas: string[];
+  disabled?: boolean;
   onFieldChange: (index: number, patch: Partial<Omit<SchemaDraft, "id">>) => void;
   onAddField: () => void;
   onRemoveField: (index: number) => void;
@@ -16,6 +17,7 @@ export interface SchemaFieldGridProps {
 export function SchemaFieldGrid({
   fields,
   refSchemas,
+  disabled = false,
   onFieldChange,
   onAddField,
   onRemoveField,
@@ -41,6 +43,7 @@ export function SchemaFieldGrid({
               index={index}
               total={fields.length}
               refSchemas={refSchemas}
+              disabled={disabled}
               onChange={onFieldChange}
               onRemove={onRemoveField}
               onMoveUp={onMoveUp}
@@ -50,7 +53,7 @@ export function SchemaFieldGrid({
         </ul>
       )}
       <div className="border-t p-3">
-        <Button type="button" variant="outline" size="sm" onClick={onAddField}>
+        <Button type="button" variant="outline" size="sm" onClick={onAddField} disabled={disabled}>
           <Plus className="size-4" aria-hidden="true" />
           Add field
         </Button>

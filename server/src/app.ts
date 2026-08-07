@@ -2,10 +2,12 @@ import express from "express";
 import type { Db } from "./db/database";
 import { openDatabase } from "./db/database";
 import { createSchemasRouter } from "./routes/schemas";
+import { createEntriesRouter } from "./routes/entries";
+import { createEventsRouter } from "./routes/events";
 import { SchemaService } from "./services/schemaService";
+import { EventsEmitter } from "./services/events";
 import { createAuthRouter } from "./routes/auth";
 import { createUsersRouter } from "./routes/users";
-import { createEntriesRouter } from "./routes/entries";
 import { createContentRouter } from "./routes/content";
 import { ContentService } from "./services/contentService";
 import { requireAuth, requireRole } from "./auth/requireAuth";
@@ -21,6 +23,7 @@ export function createApp(db?: Db): express.Express {
   const database = db ?? openDatabase();
   const schemaService = new SchemaService(database);
   const contentService = new ContentService(database);
+  const eventsEmitter = new EventsEmitter();
 
   app.get("/api/health", (_req, res) => {
     const body: HealthResponse = { status: "ok" };
@@ -32,11 +35,11 @@ export function createApp(db?: Db): express.Express {
   app.use("/api/auth", authRouter);
 
   // Schemas routes — editor only
-  const schemasRouter = createSchemasRouter(schemaService);
+  const schemasRouter = createSchemasRouter(schemaService, eventsEmitter);
   app.use("/api/schemas", requireAuth, requireRole("editor"), schemasRouter);
 
   // Content routes — editor only
-  const entriesRouter = createEntriesRouter(contentService);
+  const entriesRouter = createEntriesRouter(contentService, eventsEmitter);
   app.use("/api/schemas/:name/entries", requireAuth, requireRole("editor"), entriesRouter);
   app.use("/api/entries", requireAuth, requireRole("editor"), entriesRouter);
 
@@ -47,6 +50,10 @@ export function createApp(db?: Db): express.Express {
   // Users routes — admin only
   const usersRouter = createUsersRouter(database);
   app.use("/api/users", requireAuth, requireRole("admin"), usersRouter);
+
+  // SSE realtime stream — any authenticated user (R23)
+  const eventsRouter = createEventsRouter(eventsEmitter);
+  app.use("/api/events", requireAuth, eventsRouter);
 
   return app;
 }

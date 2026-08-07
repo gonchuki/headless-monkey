@@ -81,6 +81,12 @@ export class ContentService {
     this.repo.delete(entryId);
   }
 
+  getEntryMeta(entryId: number): { id: number; schema: string } | null {
+    const existing = this.repo.getEntry(entryId);
+    if (!existing) return null;
+    return { id: existing.record.id, schema: existing.record.schema };
+  }
+
   listForSchema(schemaName: string): ContentListEntry[] {
     const schema = this.requireSchema(schemaName);
     return this.repo.listEntries(schemaName).map((entry) => this.toEntry(entry, schema, true));

@@ -5,6 +5,7 @@ export interface AuthRequest extends Omit<Request, "user"> {
   user: {
     login: string;
     role: "admin" | "editor";
+    exp: number;
   };
 }
 
@@ -18,7 +19,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   const token = authHeader.slice(7);
   try {
     const payload = verifyToken(token);
-    (req as AuthRequest).user = { login: payload.sub, role: payload.role };
+    (req as AuthRequest).user = { login: payload.sub, role: payload.role, exp: payload.exp };
     next();
   } catch {
     res.status(401).json({ error: "Authentication required" });

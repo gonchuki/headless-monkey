@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { useEntries } from "@/hooks/useEntries";
+import { useRealtime } from "@/hooks/useRealtime";
 import { useSchemas } from "@/hooks/useSchemas";
 import type { ContentListEntry } from "@/lib/api";
 import { entryLabel, schemaLabelField } from "@/lib/entries";
@@ -35,8 +36,15 @@ export default function ContentPage() {
 
   const { listQuery: entriesQuery, remove } = useEntries(selected ?? "");
 
+  // Live stream for the selected schema: both schema and entry events affect it.
+  const { deletedSchemas } = useRealtime({
+    schemas: selected ? [selected] : [],
+    enabled: selected != null,
+  });
+
   const entries = entriesQuery.data ?? [];
   const labelFieldId = selected ? schemaLabelField(schemas.find((s) => s.name === selected)!) : null;
+  const selectedDeleted = selected != null && deletedSchemas.has(selected);
 
   function handleDeleteConfirm() {
     if (!entryToDelete) return;
@@ -58,11 +66,20 @@ export default function ContentPage() {
           <h1 className="font-heading text-xl font-semibold">Content</h1>
           <p className="text-sm text-muted-foreground">Entries stored against your schemas.</p>
         </div>
-        <Button type="button" onClick={() => navigate("/content/new")} disabled={schemas.length === 0}>
+        <Button type="button" onClick={() => navigate("/content/new")} disabled={schemas.length === 0 || selectedDeleted}>
           <Plus className="size-4" aria-hidden="true" />
           New entry
         </Button>
       </div>
+
+      {selectedDeleted && (
+        <Alert>
+          <AlertTitle>This schema was deleted</AlertTitle>
+          <AlertDescription>
+            {selected} was deleted by another editor. Its content can no longer be changed.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {schemasQuery.isPending && <Skeleton className="h-8 w-64" />}
 
@@ -130,11 +147,16 @@ export default function ContentPage() {
           {entries.map((entry) => (
             <li
               key={entry.id}
-              className={cn("flex items-center justify-between gap-3 p-3", entry.conflict && "bg-destructive/5")}
+              className={cn(
+                "flex items-center justify-between gap-3 p-3",
+                entry.conflict && "bg-destructive/5",
+                selectedDeleted && "pointer-events-none opacity-50",
+              )}
             >
               <button
                 type="button"
                 className="min-w-0 flex-1 text-left"
+                disabled={selectedDeleted}
                 onClick={() => navigate(`/content/${encodeURIComponent(selected!)}/${entry.id}`)}
               >
                 <p className="truncate text-sm font-medium">{entryLabel(entry, labelFieldId)}</p>
@@ -154,6 +176,7 @@ export default function ContentPage() {
                   variant="ghost"
                   size="icon-sm"
                   aria-label={`Edit ${entryLabel(entry, labelFieldId)}`}
+                  disabled={selectedDeleted}
                   onClick={() => navigate(`/content/${encodeURIComponent(selected!)}/${entry.id}`)}
                 >
                   <PencilSimple className="size-4" aria-hidden="true" />
@@ -163,6 +186,7 @@ export default function ContentPage() {
                   variant="ghost"
                   size="icon-sm"
                   aria-label={`Delete ${entryLabel(entry, labelFieldId)}`}
+                  disabled={selectedDeleted}
                   onClick={() => setEntryToDelete(entry)}
                 >
                   <Trash className="size-4" aria-hidden="true" />
