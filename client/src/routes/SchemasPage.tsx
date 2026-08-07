@@ -9,6 +9,7 @@ import { toast } from "@/components/ui/toast";
 import { useRealtime } from "@/hooks/useRealtime";
 import { useSchemaEntryCount, useSchemas } from "@/hooks/useSchemas";
 import { type SchemaEntry } from "@/lib/api";
+import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
 
 function errorMessage(error: unknown): string | undefined {
@@ -92,7 +93,14 @@ export default function SchemasPage() {
                 )}
               >
                 <div className="min-w-0 flex-1 text-left">
-                  <p className="truncate text-sm font-medium">{schema.name}</p>
+                  <p className="truncate text-sm font-medium">
+                    <span
+                      className="inline-block size-4 shrink-0 rounded-full"
+                      style={{ backgroundColor: schemaColor(schema.name).background }}
+                      aria-hidden="true"
+                    />
+                    {schema.name}
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     v{schema.version} · {schema.fields.length} {schema.fields.length === 1 ? "field" : "fields"}
                   </p>

@@ -7,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { schemaColor } from "@/lib/schemaColors";
 import { useSchemas } from "@/hooks/useSchemas";
 
 export interface NewEntrySelectorProps {
@@ -41,6 +42,11 @@ export function NewEntrySelector({ value, onChange }: NewEntrySelectorProps) {
         <SelectContent>
           {schemas.map((schema) => (
             <SelectItem key={schema.name} value={schema.name}>
+              <span
+                className="inline-block size-4 shrink-0 rounded-full"
+                style={{ backgroundColor: schemaColor(schema.name).background }}
+                aria-hidden="true"
+              />
               {schema.name}
             </SelectItem>
           ))}

@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { schemaColor } from "@/lib/schemaColors";
 import { FIELD_TYPE_LABELS, FIELD_TYPES, type FieldType } from "@/lib/api";
 import { FIELD_GRID_TEMPLATE } from "@/lib/schemaGrid";
 import type { SchemaDraft } from "@/hooks/useSchemas";
@@ -114,6 +115,11 @@ export function SchemaFieldRow({
             <SelectContent>
               {refSchemas.map((schema) => (
                 <SelectItem key={schema} value={schema}>
+                  <span
+                    className="inline-block size-4 shrink-0 rounded-full"
+                    style={{ backgroundColor: schemaColor(schema).background }}
+                    aria-hidden="true"
+                  />
                   {schema}
                 </SelectItem>
               ))}

@@ -20,6 +20,7 @@ import { useRealtime } from "@/hooks/useRealtime";
 import { useSchemas } from "@/hooks/useSchemas";
 import type { ContentListEntry } from "@/lib/api";
 import { entryLabel, schemaLabelField } from "@/lib/entries";
+import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
 
 const ALL_SCHEMAS_VALUE = "all";
@@ -161,6 +162,11 @@ export default function ContentPage() {
               <SelectItem value={ALL_SCHEMAS_VALUE}>All schemas</SelectItem>
               {schemas.map((schema) => (
                 <SelectItem key={schema.name} value={schema.name}>
+                  <span
+                    className="inline-block size-4 shrink-0 rounded-full"
+                    style={{ backgroundColor: schemaColor(schema.name).background }}
+                    aria-hidden="true"
+                  />
                   {schema.name}
                 </SelectItem>
               ))}
@@ -217,7 +223,13 @@ export default function ContentPage() {
                   </p>
                 </div>
                 {allView && (
-                  <span className="flex shrink-0 items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                  <span
+                    className="flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                    style={{
+                      backgroundColor: schemaColor(entry.schema).background,
+                      color: schemaColor(entry.schema).foreground,
+                    }}
+                  >
                     {entry.schema}
                   </span>
                 )}
