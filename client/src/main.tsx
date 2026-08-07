@@ -8,6 +8,8 @@ import { isUnauthorizedError, notifyUnauthorized } from "@/lib/api";
 import AppLayout from "@/layouts/AppLayout";
 import LoginPage from "@/routes/LoginPage";
 import AdminUsersPage from "@/routes/AdminUsersPage";
+import SchemaEditorPage from "@/routes/SchemaEditorPage";
+import SchemasPage from "@/routes/SchemasPage";
 import PlaceholderPage from "@/routes/PlaceholderPage";
 import "@/index.css";
 
@@ -29,7 +31,7 @@ const router = createBrowserRouter([
         path: "/schemas",
         element: (
           <RequireRole role="editor">
-            <PlaceholderPage title="Schemas" />
+            <SchemasPage />
           </RequireRole>
         ),
       },
@@ -37,7 +39,7 @@ const router = createBrowserRouter([
         path: "/schemas/:name",
         element: (
           <RequireRole role="editor">
-            <PlaceholderPage title="Schema" />
+            <SchemaEditorPage />
           </RequireRole>
         ),
       },

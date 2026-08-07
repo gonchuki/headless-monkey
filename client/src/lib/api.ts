@@ -9,6 +9,48 @@ export interface UserListItem {
   disabled: boolean;
 }
 
+export type FieldType = "text" | "number" | "boolean" | "date" | "schema-ref";
+
+export const FIELD_TYPES: FieldType[] = ["text", "number", "boolean", "date", "schema-ref"];
+
+export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
+  text: "Text",
+  number: "Number",
+  boolean: "Boolean",
+  date: "Date",
+  "schema-ref": "Schema reference",
+};
+
+export interface SchemaFieldInput {
+  id?: number;
+  label: string;
+  type: FieldType;
+  required: boolean;
+  ref_schema?: string;
+}
+
+export interface SchemaField extends SchemaFieldInput {
+  id: number;
+}
+
+export interface SchemaEntry {
+  name: string;
+  version: number;
+  compat_version: number;
+  creation_date: string;
+  created_by: string;
+  last_modified_date: string;
+  last_modified_by: string;
+  fields: SchemaField[];
+}
+
+export interface SchemaEntryRow {
+  id: number;
+  schema: string;
+  schema_version: number;
+  conflict: boolean;
+}
+
 export const TOKEN_STORAGE_KEY = "headless-monkey.token";
 export const AUTH_UNAUTHORIZED_EVENT = "headless-monkey:unauthorized";
 
