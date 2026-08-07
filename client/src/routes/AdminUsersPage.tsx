@@ -1,9 +1,17 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash } from "@phosphor-icons/react";
+import { Key, Plus, Trash } from "@phosphor-icons/react";
 import { apiFetch, type UserListItem } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import { Skeleton } from "@/components/Skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Alert,
   AlertDescription,
@@ -37,6 +45,8 @@ export default function AdminUsersPage() {
 
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordTarget, setPasswordTarget] = useState<{ id: number; login: string } | null>(null);
+  const [newPassword, setNewPassword] = useState("");
   const [userToDelete, setUserToDelete] = useState<UserListItem | null>(null);
 
   const createMutation = useMutation({
@@ -111,9 +121,43 @@ export default function AdminUsersPage() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.users() }),
   });
 
+  const passwordMutation = useMutation({
+    mutationFn: (vars: { id: number; password: string }) =>
+      apiFetch<{ id: number; login: string; disabled: boolean }>(`/api/users/${vars.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ password: vars.password }),
+      }),
+    onSuccess: () => {
+      toast.add({ type: "success", title: "Password updated" });
+      setPasswordTarget(null);
+      setNewPassword("");
+    },
+    onError: (error) => {
+      toast.add({ type: "error", title: "Failed to update password", description: errorMessage(error) });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.users() }),
+  });
+
   function handleCreate(event: FormEvent) {
     event.preventDefault();
     createMutation.mutate({ login, password });
+  }
+
+  function handlePasswordChange(event: FormEvent) {
+    event.preventDefault();
+    if (passwordTarget && newPassword) {
+      passwordMutation.mutate({ id: passwordTarget.id, password: newPassword });
+    }
+  }
+
+  function openPasswordEditor(user: { id: number; login: string }) {
+    setNewPassword("");
+    setPasswordTarget(user);
+  }
+
+  function closePasswordEditor() {
+    setNewPassword("");
+    setPasswordTarget(null);
   }
 
   const users = usersQuery.data ?? [];
@@ -185,6 +229,9 @@ export default function AdminUsersPage() {
                 >
                   {item.disabled ? "Enable" : "Disable"}
                 </Button>
+                <Button type="button" variant="ghost" size="icon-sm" aria-label={`Change password for ${item.login}`} onClick={() => openPasswordEditor(item)}>
+                  <Key className="size-4" aria-hidden="true" />
+                </Button>
                 <Button type="button" variant="ghost" size="icon-sm" aria-label={`Delete ${item.login}`} onClick={() => setUserToDelete(item)}>
                   <Trash className="size-4" aria-hidden="true" />
                 </Button>
@@ -219,6 +266,37 @@ export default function AdminUsersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={passwordTarget != null} onOpenChange={(open) => !open && closePasswordEditor()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change password</DialogTitle>
+            <DialogDescription>
+              Set a new password for <span className="font-medium text-foreground">{passwordTarget?.login}</span>.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handlePasswordChange} className="grid gap-4">
+            <div className="grid gap-1.5">
+              <Label htmlFor="edit-password">New password</Label>
+              <Input
+                id="edit-password"
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closePasswordEditor}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={passwordMutation.isPending || newPassword.length === 0}>
+                Save
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
