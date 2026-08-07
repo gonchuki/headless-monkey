@@ -44,9 +44,9 @@ export default function NewContentPage() {
     create.mutate(
       { schema: selected, values },
       {
-        onSuccess: (entry) => {
+        onSuccess: () => {
           toast.add({ type: "success", title: "Entry created" });
-          navigate(`/content/${encodeURIComponent(selected)}/${entry.id}`, { replace: true });
+          navigate("/content", { replace: true });
         },
       },
     );

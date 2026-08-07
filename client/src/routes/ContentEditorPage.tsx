@@ -84,6 +84,7 @@ export default function ContentEditorPage() {
       {
         onSuccess: () => {
           toast.add({ type: "success", title: "Entry saved" });
+          navigate("/content", { replace: true });
         },
       },
     );

@@ -179,9 +179,9 @@ export default function SchemaEditorPage() {
       create.mutate(
         { name: state.name.trim(), fields },
         {
-          onSuccess: (schema) => {
+          onSuccess: () => {
             toast.add({ type: "success", title: "Schema created" });
-            navigate(`/schemas/${encodeURIComponent(schema.name)}`, { replace: true });
+            navigate("/schemas", { replace: true });
           },
         },
       );
@@ -190,14 +190,8 @@ export default function SchemaEditorPage() {
         { name: state.name, fields },
         {
           onSuccess: (schema) => {
-            dispatch({
-              type: "LOAD",
-              name: schema.name,
-              version: schema.version,
-              compatVersion: schema.compat_version,
-              fields: schema.fields,
-            });
             toast.add({ type: "success", title: "Schema saved", description: `Version ${schema.version}` });
+            navigate("/schemas", { replace: true });
           },
         },
       );
