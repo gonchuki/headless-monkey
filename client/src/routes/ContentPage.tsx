@@ -153,17 +153,12 @@ export default function ContentPage() {
                 selectedDeleted && "pointer-events-none opacity-50",
               )}
             >
-              <button
-                type="button"
-                className="min-w-0 flex-1 text-left"
-                disabled={selectedDeleted}
-                onClick={() => navigate(`/content/${encodeURIComponent(selected!)}/${entry.id}`)}
-              >
+              <div className="min-w-0 flex-1 text-left">
                 <p className="truncate text-sm font-medium">{entryLabel(entry, labelFieldId)}</p>
                 <p className="text-xs text-muted-foreground">
                   v{entry.schema_version} · updated {entry.last_modified_by}
                 </p>
-              </button>
+              </div>
               {entry.conflict && (
                 <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600">
                   <WarningCircle className="size-3.5" aria-hidden="true" />

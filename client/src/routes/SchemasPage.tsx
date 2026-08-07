@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { Plus, Trash } from "@phosphor-icons/react";
+import { PencilSimple, Plus, Trash } from "@phosphor-icons/react";
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { Skeleton } from "@/components/Skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -91,27 +91,34 @@ export default function SchemasPage() {
                   deleted && "pointer-events-none opacity-50",
                 )}
               >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 text-left"
-                  disabled={deleted}
-                  onClick={() => navigate(`/schemas/${encodeURIComponent(schema.name)}`)}
-                >
+                <div className="min-w-0 flex-1 text-left">
                   <p className="truncate text-sm font-medium">{schema.name}</p>
                   <p className="text-xs text-muted-foreground">
                     v{schema.version} · {schema.fields.length} {schema.fields.length === 1 ? "field" : "fields"}
                   </p>
-                </button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Delete ${schema.name}`}
-                  disabled={deleted}
-                  onClick={() => setSchemaToDelete(schema)}
-                >
-                  <Trash className="size-4" aria-hidden="true" />
-                </Button>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Edit ${schema.name}`}
+                    disabled={deleted}
+                    onClick={() => navigate(`/schemas/${encodeURIComponent(schema.name)}`)}
+                  >
+                    <PencilSimple className="size-4" aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Delete ${schema.name}`}
+                    disabled={deleted}
+                    onClick={() => setSchemaToDelete(schema)}
+                  >
+                    <Trash className="size-4" aria-hidden="true" />
+                  </Button>
+                </div>
               </li>
             );
           })}
