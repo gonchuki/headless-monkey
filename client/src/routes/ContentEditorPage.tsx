@@ -2,7 +2,7 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "@phosphor-icons/react";
 import { DynamicEntryForm, type EntryValues } from "@/components/DynamicEntryForm";
-import { PageSkeleton } from "@/components/PageSkeleton";
+import { PageSkeleton } from "@/components/shared/PageSkeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";

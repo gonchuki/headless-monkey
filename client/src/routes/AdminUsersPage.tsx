@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Key, Plus, Trash } from "@phosphor-icons/react";
 import { apiFetch, type UserListItem } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
-import { Skeleton } from "@/components/Skeleton";
+import { Skeleton } from "@/components/shared/Skeleton";
 import {
   Dialog,
   DialogContent,

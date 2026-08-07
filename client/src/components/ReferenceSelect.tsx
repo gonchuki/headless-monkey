@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Skeleton } from "@/components/Skeleton";
+import { Skeleton } from "@/components/shared/Skeleton";
 import {
   Select,
   SelectContent,

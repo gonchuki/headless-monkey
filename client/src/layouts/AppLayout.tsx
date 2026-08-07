@@ -1,7 +1,7 @@
 import { Navigate, Outlet } from "react-router";
 import { useAuth } from "@/auth/AuthProvider";
 import { Nav } from "@/components/Nav";
-import { PageSkeleton } from "@/components/PageSkeleton";
+import { PageSkeleton } from "@/components/shared/PageSkeleton";
 import { Toaster } from "@/components/ui/toast";
 
 export default function AppLayout() {
