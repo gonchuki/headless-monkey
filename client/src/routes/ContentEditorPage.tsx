@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "@phosphor-icons/react";
 import { DynamicEntryForm, type EntryValues } from "@/components/DynamicEntryForm";
@@ -19,6 +19,8 @@ function errorMessage(error: unknown): string | undefined {
 export default function ContentEditorPage() {
   const { schema: schemaName = "", id: idParam = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const targetList = typeof location.state?.list === "string" ? location.state.list : "/content";
   const entryId = Number(idParam);
 
   const schemaQuery = useQuery({
@@ -41,7 +43,7 @@ export default function ContentEditorPage() {
     return (
       <div className="mx-auto max-w-2xl space-y-4">
         <div className="flex items-center gap-3">
-          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate("/content")}>
+          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate(targetList)}>
             <ArrowLeft className="size-4" aria-hidden="true" />
           </Button>
           <h1 className="font-heading text-xl font-semibold">Schema not found</h1>
@@ -59,7 +61,7 @@ export default function ContentEditorPage() {
     return (
       <div className="mx-auto max-w-2xl space-y-4">
         <div className="flex items-center gap-3">
-          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate("/content")}>
+          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate(targetList)}>
             <ArrowLeft className="size-4" aria-hidden="true" />
           </Button>
           <h1 className="font-heading text-xl font-semibold">Entry not found</h1>
@@ -84,7 +86,7 @@ export default function ContentEditorPage() {
       {
         onSuccess: () => {
           toast.add({ type: "success", title: "Entry saved" });
-          navigate("/content", { replace: true });
+          navigate(targetList, { replace: true });
         },
       },
     );
@@ -94,7 +96,7 @@ export default function ContentEditorPage() {
     <div className="mx-auto max-w-3xl space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate("/content")}>
+          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate(targetList)}>
             <ArrowLeft className="size-4" aria-hidden="true" />
           </Button>
           <div>

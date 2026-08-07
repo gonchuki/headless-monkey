@@ -62,6 +62,14 @@ const router = createBrowserRouter([
         ),
       },
       {
+        path: "/content/:schema",
+        element: (
+          <RequireRole role="editor">
+            <ContentPage />
+          </RequireRole>
+        ),
+      },
+      {
         path: "/content/:schema/:id",
         element: (
           <RequireRole role="editor">

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "@phosphor-icons/react";
 import { DynamicEntryForm, type EntryValues } from "@/components/DynamicEntryForm";
@@ -19,6 +19,8 @@ function errorMessage(error: unknown): string | undefined {
 
 export default function NewContentPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const targetList = typeof location.state?.list === "string" ? location.state.list : "/content";
   const { listQuery: schemasQuery } = useSchemas();
   const [schemaName, setSchemaName] = useState<string | null>(null);
 
@@ -46,7 +48,7 @@ export default function NewContentPage() {
       {
         onSuccess: () => {
           toast.add({ type: "success", title: "Entry created" });
-          navigate("/content", { replace: true });
+          navigate(targetList, { replace: true });
         },
       },
     );
@@ -55,7 +57,7 @@ export default function NewContentPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div className="flex items-center gap-3">
-        <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate("/content")}>
+        <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate(targetList)}>
           <ArrowLeft className="size-4" aria-hidden="true" />
         </Button>
         <div>
