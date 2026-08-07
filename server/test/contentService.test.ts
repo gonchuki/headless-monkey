@@ -45,7 +45,7 @@ describe("ContentService", () => {
         Array.from({ length: 10 }, (_, i) => ({
           label: `pad${i}`,
           type: "text" as const,
-          required: false,
+          required: i === 0,
         }))
       );
       const car = makeSchema(schemaService, "car", [
@@ -164,14 +164,15 @@ describe("ContentService", () => {
     it("invalid types are rejected → 422", () => {
       const { schemaService, contentService } = setup();
       makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
         { label: "year", type: "number", required: false },
         { label: "built", type: "date", required: false },
         { label: "active", type: "boolean", required: false },
       ]);
 
-      expectStatus(() => contentService.create("car", { "1": "2019" }, "editor1"), 422);
-      expectStatus(() => contentService.create("car", { "2": "not-a-date" }, "editor1"), 422);
-      expectStatus(() => contentService.create("car", { "3": "yes" }, "editor1"), 422);
+      expectStatus(() => contentService.create("car", { "2": "not-a-number" }, "editor1"), 422);
+      expectStatus(() => contentService.create("car", { "3": "not-a-date" }, "editor1"), 422);
+      expectStatus(() => contentService.create("car", { "4": "yes" }, "editor1"), 422);
     });
 
     it("unknown schema → 404", () => {

@@ -37,6 +37,24 @@ export class SchemaService {
       throw new SchemaServiceError(422, "Schema must have at least one field");
     }
 
+    // R8: empty/whitespace-only field label → 422
+    for (const f of fields) {
+      if (f.label.trim() === "") {
+        throw new SchemaServiceError(
+          422,
+          "Field label must be non-empty"
+        );
+      }
+    }
+
+    // R8: at least one required field → 422
+    if (!fields.some((f) => f.required)) {
+      throw new SchemaServiceError(
+        422,
+        "Schema must have at least one required field"
+      );
+    }
+
     // R8: duplicate labels → 422
     const labels = new Set<string>();
     for (const f of fields) {
@@ -97,6 +115,29 @@ export class SchemaService {
     const existing = this.repo.getSchema(name);
     if (!existing) {
       throw new SchemaServiceError(404, `Schema '${name}' not found`);
+    }
+
+    // R8: zero fields → 422
+    if (fields.length === 0) {
+      throw new SchemaServiceError(422, "Schema must have at least one field");
+    }
+
+    // R8: empty/whitespace-only field label → 422
+    for (const f of fields) {
+      if (f.label.trim() === "") {
+        throw new SchemaServiceError(
+          422,
+          "Field label must be non-empty"
+        );
+      }
+    }
+
+    // R8: at least one required field → 422
+    if (!fields.some((f) => f.required)) {
+      throw new SchemaServiceError(
+        422,
+        "Schema must have at least one required field"
+      );
     }
 
     // Validate field types and ref_schema

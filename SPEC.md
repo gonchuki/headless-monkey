@@ -1,5 +1,6 @@
-# SPEC: headless-monkey CMS (v0.4 — 2026-08-06)
+# SPEC: headless-monkey CMS (v0.5 — 2026-08-07)
 
+v0.5 — schema fields must have non-empty labels and every schema needs at least one required field (§2 R8, R30)
 v0.4 — corrected UI component mapping: user confirmations use `<AlertDialog />`; `<Alert />` is the passive banner; `<Toast />` is the notification toast (§2 R22, R24, R26; §5)
 v0.3 — resolved build-plan decisions: required text must be non-empty; lossless value coercion on type change; referenced-schema delete blocked (409); SSE via fetch reader (§2 R16–R17, §5, §6)
 v0.2 — layout changed to a pnpm workspaces monorepo (`client/` and `server/` packages), §5 §8
@@ -20,7 +21,7 @@ Auth & users
 - R7. `PATCH /api/users/:id` can change `password` and/or flip `disabled`. `DELETE /api/users/:id` removes the editor. (No admin row exists to be modified/deleted.)
 
 Schema model & versioning
-- R8. `POST /api/schemas` with zero fields returns 422; with duplicate field labels returns 422; with a `name` that already exists returns 409.
+- R8. `POST /api/schemas` with zero fields, with an empty/whitespace-only field label, with no required fields, or with duplicate field labels returns 422; with a `name` that already exists returns 409. `PATCH /api/schemas/:name` returns 422 with zero fields, with an empty/whitespace-only field label, or with no required fields.
 - R9. Field `type` is limited to `text|number|boolean|date|schema-ref`; anything else returns 422. A `schema-ref` field requires a valid existing `ref_schema` name.
 - R10. Circular `schema-ref` references (direct or transitive) return 422 on create/update of the schema that would close the cycle.
 - R11. On schema create, `version=1` and `compat_version=1`; `creation_date`/`last_modified_date`/`created_by`/`last_modified_by` are set.
@@ -50,7 +51,7 @@ Client
 - R29. Routes: `/login`, `/admin` (users), `/schemas`, `/schemas/:name`, `/content`, `/content/new`, `/content/:schema/:id`. `admin` tokens can only reach `/admin`; editor tokens cannot reach `/admin`.
 - R30. The schema editor is a 3-column sortable grid: `field_label | field_type | required`.
 - R31. The content editor is a dynamic 2-column form (`label | type-input`); required fields show a red `*` next to the label.
-- R32. A `schema-ref` field renders a `<select>` of the target schema's entries, labeled by the value of the target's first required field by `sort_order` (fallback: first field by `sort_order`; empty value → the entry id).
+- R32. A `schema-ref` field renders a `<select>` of the target schema's entries, labeled by the value of the target's first required field by `sort_order`. The fallback to first field by `sort_order` (then entry id) exists only for legacy schemas that predate the ≥1-required-field rule.
 - R33. When editing a conflicted entry, the stored (old) version of each affected field renders disabled with the new enabled field below it.
 
 ## 3. Non-goals (binding)

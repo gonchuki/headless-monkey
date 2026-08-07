@@ -104,6 +104,43 @@ describe("Schema Routes", () => {
       expect(res.status).toBe(422);
     });
 
+    it("rejects whitespace-only label (R8) → 422", async () => {
+      const { app } = createTestApp();
+      const res = await request(app)
+        .post("/api/schemas")
+        .send({
+          name: "blank",
+          fields: [{ label: "   ", type: "text", required: true }],
+        });
+
+      expect(res.status).toBe(422);
+    });
+
+    it("rejects no required fields (R8) → 422", async () => {
+      const { app } = createTestApp();
+      const res = await request(app)
+        .post("/api/schemas")
+        .send({
+          name: "optional",
+          fields: [{ label: "x", type: "text", required: false }],
+        });
+
+      expect(res.status).toBe(422);
+    });
+
+    it("rejects zero fields on update (R8) → 422", async () => {
+      const { app, schemaService } = createTestApp();
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+
+      const res = await request(app)
+        .patch("/api/schemas/car")
+        .send({ fields: [] });
+
+      expect(res.status).toBe(422);
+    });
+
     it("rejects duplicate name (R8) → 409", async () => {
       const { app } = createTestApp();
       await request(app)
@@ -148,6 +185,7 @@ describe("Schema Routes", () => {
           name: "car",
           fields: [
             { label: "twin", type: "schema-ref", required: false, ref_schema: "car" },
+            { label: "make", type: "text", required: true },
           ],
         });
 
@@ -161,9 +199,11 @@ describe("Schema Routes", () => {
       ], "editor1");
       schemaService.create("garage", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "name", type: "text", required: true },
       ], "editor1");
       schemaService.create("car", [
         { label: "garage_ref", type: "schema-ref", required: false, ref_schema: "garage" },
+        { label: "name", type: "text", required: true },
       ], "editor1");
 
       // Try to update person to reference car → cycle: person→car→garage→person
@@ -186,6 +226,7 @@ describe("Schema Routes", () => {
       ], "editor1");
       schemaService.create("car", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       // Try to update person to reference car → cycle
@@ -280,6 +321,7 @@ describe("Schema Routes", () => {
       ], "editor1");
       schemaService.create("car", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       const res = await request(app).delete("/api/schemas/person");
@@ -294,6 +336,7 @@ describe("Schema Routes", () => {
       ], "editor1");
       schemaService.create("car", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       // Delete car first
@@ -430,44 +473,60 @@ describe("Schema Routes", () => {
           case "optional→required":
             schemaService.create("car", [
               { label: "color", type: "text", required: false },
+              { label: "make", type: "text", required: true },
             ], "editor1");
             await request(app)
               .patch("/api/schemas/car")
               .send({
-                fields: [{ id: 1, label: "color", type: "text", required: true }],
+                fields: [
+                  { id: 1, label: "color", type: "text", required: true },
+                  { id: 2, label: "make", type: "text", required: true },
+                ],
               });
             break;
 
           case "into boolean":
             schemaService.create("car", [
               { label: "active", type: "text", required: false },
+              { label: "make", type: "text", required: true },
             ], "editor1");
             await request(app)
               .patch("/api/schemas/car")
               .send({
-                fields: [{ id: 1, label: "active", type: "boolean", required: false }],
+                fields: [
+                  { id: 1, label: "active", type: "boolean", required: false },
+                  { id: 2, label: "make", type: "text", required: true },
+                ],
               });
             break;
 
           case "out of boolean":
             schemaService.create("car", [
               { label: "active", type: "boolean", required: false },
+              { label: "make", type: "text", required: true },
             ], "editor1");
             await request(app)
               .patch("/api/schemas/car")
               .send({
-                fields: [{ id: 1, label: "active", type: "text", required: false }],
+                fields: [
+                  { id: 1, label: "active", type: "text", required: false },
+                  { id: 2, label: "make", type: "text", required: true },
+                ],
               });
             break;
 
           case "into date":
             schemaService.create("car", [
               { label: "built", type: "text", required: false },
+              { label: "make", type: "text", required: true },
             ], "editor1");
             await request(app)
               .patch("/api/schemas/car")
               .send({
-                fields: [{ id: 1, label: "built", type: "date", required: false }],
+                fields: [
+                  { id: 1, label: "built", type: "date", required: false },
+                  { id: 2, label: "make", type: "text", required: true },
+                ],
               });
             break;
 
@@ -480,12 +539,14 @@ describe("Schema Routes", () => {
             ], "editor1");
             schemaService.create("car", [
               { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+              { label: "make", type: "text", required: true },
             ], "editor1");
             await request(app)
               .patch("/api/schemas/car")
               .send({
                 fields: [
                   { id: 1, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+                  { id: 2, label: "make", type: "text", required: true },
                 ],
               });
             break;

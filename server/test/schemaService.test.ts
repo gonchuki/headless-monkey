@@ -79,6 +79,24 @@ describe("SchemaService", () => {
       ).toThrow(SchemaServiceError);
     });
 
+    it("rejects whitespace-only field label (R8)", () => {
+      const service = createService();
+      expect(() =>
+        service.create("bad", [
+          { label: "   ", type: "text", required: true },
+        ], "editor1")
+      ).toThrow(SchemaServiceError);
+    });
+
+    it("rejects schema with no required field (R8)", () => {
+      const service = createService();
+      expect(() =>
+        service.create("bad", [
+          { label: "make", type: "text", required: false },
+        ], "editor1")
+      ).toThrow(SchemaServiceError);
+    });
+
     it("rejects self-referential schema-ref (R10)", () => {
       const service = createService();
       service.create("person", [
@@ -105,6 +123,7 @@ describe("SchemaService", () => {
       // But let's test: create car with ref to garage, then try to update person to ref car
       service.create("car", [
         { label: "garage_ref", type: "schema-ref", required: false, ref_schema: "garage" },
+        { label: "name", type: "text", required: true },
       ], "editor1");
 
       // Now try updating person to reference car → cycle: person→car→garage→person
@@ -125,6 +144,7 @@ describe("SchemaService", () => {
       // car references person, then try to update person to reference car
       service.create("car", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "name", type: "text", required: true },
       ], "editor1");
 
       expect(() =>
@@ -137,6 +157,45 @@ describe("SchemaService", () => {
   });
 
   describe("update", () => {
+    it("rejects zero fields on update (R8)", () => {
+      const service = createService();
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+
+      expect(() => service.update("car", [], "editor1")).toThrow(
+        SchemaServiceError
+      );
+    });
+
+    it("rejects whitespace-only field label on update (R8)", () => {
+      const service = createService();
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+
+      expect(() =>
+        service.update("car", [
+          { id: 1, label: "  ", type: "text", required: true },
+        ], "editor1")
+      ).toThrow(SchemaServiceError);
+    });
+
+    it("rejects update leaving no required field (R8)", () => {
+      const service = createService();
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: true },
+      ], "editor1");
+
+      expect(() =>
+        service.update("car", [
+          { id: 1, label: "make", type: "text", required: false },
+          { id: 2, label: "color", type: "text", required: false },
+        ], "editor1")
+      ).toThrow(SchemaServiceError);
+    });
+
     it("increments version on every update (R12)", () => {
       const service = createService();
       service.create("car", [
@@ -188,10 +247,12 @@ describe("SchemaService", () => {
       const service = createService();
       service.create("car", [
         { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: true },
       ], "editor1");
 
       const schema = service.update("car", [
         { id: 1, label: "make", type: "text", required: false },
+        { id: 2, label: "color", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(1); // unchanged
@@ -270,10 +331,12 @@ describe("SchemaService", () => {
       const service = createService();
       service.create("car", [
         { label: "color", type: "text", required: false },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       const schema = service.update("car", [
         { id: 1, label: "color", type: "text", required: true },
+        { id: 2, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(2); // = new version
@@ -283,10 +346,12 @@ describe("SchemaService", () => {
       const service = createService();
       service.create("car", [
         { label: "active", type: "text", required: false },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       const schema = service.update("car", [
         { id: 1, label: "active", type: "boolean", required: false },
+        { id: 2, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(2); // = new version
@@ -296,10 +361,12 @@ describe("SchemaService", () => {
       const service = createService();
       service.create("car", [
         { label: "built", type: "text", required: false },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       const schema = service.update("car", [
         { id: 1, label: "built", type: "date", required: false },
+        { id: 2, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(2); // = new version
@@ -312,10 +379,12 @@ describe("SchemaService", () => {
       ], "editor1");
       service.create("car", [
         { label: "owner_name", type: "text", required: false },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       const schema = service.update("car", [
         { id: 1, label: "owner_name", type: "schema-ref", required: false, ref_schema: "person" },
+        { id: 2, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(2); // = new version
@@ -325,10 +394,12 @@ describe("SchemaService", () => {
       const service = createService();
       service.create("car", [
         { label: "active", type: "boolean", required: false },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       const schema = service.update("car", [
         { id: 1, label: "active", type: "text", required: false },
+        { id: 2, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(2); // = new version
@@ -344,10 +415,12 @@ describe("SchemaService", () => {
       ], "editor1");
       service.create("car", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "make", type: "text", required: true },
       ], "editor1");
 
       const schema = service.update("car", [
         { id: 1, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+        { id: 2, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(2); // = new version
@@ -405,6 +478,7 @@ describe("SchemaService", () => {
       ], "editor1");
       service.create("car", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "name", type: "text", required: true },
       ], "editor1");
 
       try {
@@ -423,6 +497,7 @@ describe("SchemaService", () => {
       ], "editor1");
       service.create("car", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "name", type: "text", required: true },
       ], "editor1");
 
       // Delete car first (the referencing schema)

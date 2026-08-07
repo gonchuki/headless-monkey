@@ -34,7 +34,7 @@ export function SchemaFieldGrid({
         <span className="sr-only">Actions</span>
       </div>
       {fields.length === 0 ? (
-        <p className="p-4 text-sm text-muted-foreground">No fields yet. Add at least one field to save this schema.</p>
+        <p className="p-4 text-sm text-muted-foreground">No fields yet. Add at least one required field to save this schema.</p>
       ) : (
         <ul>
           {fields.map((field, index) => (

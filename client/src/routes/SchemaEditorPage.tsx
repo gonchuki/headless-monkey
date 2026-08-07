@@ -72,7 +72,7 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
     case "ADD_FIELD":
       return {
         ...state,
-        fields: [...state.fields, { id: state.nextNewId, label: "", type: "text", required: false }],
+        fields: [...state.fields, { id: state.nextNewId, label: "", type: "text", required: true }],
         nextNewId: state.nextNewId - 1,
       };
     case "REMOVE_FIELD":
@@ -172,6 +172,8 @@ export default function SchemaEditorPage() {
 
   function handleSave() {
     if (state.fields.length === 0) return;
+    if (state.fields.some((field) => field.label.trim() === "")) return;
+    if (!state.fields.some((field) => field.required)) return;
     const fields = toPayload(state.fields);
 
     if (isCreate) {
@@ -219,7 +221,13 @@ export default function SchemaEditorPage() {
     );
   }
 
-  const canSave = state.fields.length === 0 || (isCreate && state.name.trim() === "") || pending || deleted;
+  const canSave =
+    state.fields.length === 0 ||
+    (isCreate && state.name.trim() === "") ||
+    state.fields.some((field) => field.label.trim() === "") ||
+    !state.fields.some((field) => field.required) ||
+    pending ||
+    deleted;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
