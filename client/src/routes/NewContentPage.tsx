@@ -21,11 +21,12 @@ export default function NewContentPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const targetList = typeof location.state?.list === "string" ? location.state.list : "/content";
+  const defaultSchema = typeof location.state?.schema === "string" ? location.state.schema : null;
   const { listQuery: schemasQuery } = useSchemas();
   const [schemaName, setSchemaName] = useState<string | null>(null);
 
   const schemas = schemasQuery.data ?? [];
-  const selected = schemaName ?? schemas[0]?.name ?? null;
+  const selected = schemaName;
 
   const schemaQuery = useQuery({
     queryKey: queryKeys.schema(selected ?? ""),
@@ -35,11 +36,16 @@ export default function NewContentPage() {
 
   const { create } = useEntries(selected ?? "");
 
+  // Validate default schema against loaded list; clamp to null if missing.
   useEffect(() => {
-    if (schemaName == null && schemas[0] != null) {
-      setSchemaName(schemas[0].name);
+    if (schemasQuery.isSuccess && schemas.length > 0) {
+      if (defaultSchema != null && !schemas.some((s) => s.name === defaultSchema)) {
+        setSchemaName(null);
+      } else if (schemaName == null && defaultSchema != null) {
+        setSchemaName(defaultSchema);
+      }
     }
-  }, [schemaName, schemas]);
+  }, [schemasQuery.isSuccess, schemas, defaultSchema, schemaName]);
 
   function handleSubmit(values: EntryValues) {
     if (selected == null) return;
@@ -69,6 +75,10 @@ export default function NewContentPage() {
       <div className="max-w-xs">
         <NewEntrySelector value={selected ?? undefined} onChange={setSchemaName} />
       </div>
+
+      {selected == null && schemas.length > 0 && (
+        <p className="text-sm text-muted-foreground">Select a schema to begin.</p>
+      )}
 
       {schemasQuery.isSuccess && schemas.length === 0 && (
         <Alert>

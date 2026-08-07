@@ -107,7 +107,7 @@ export default function ContentPage() {
         </div>
         <Button
           type="button"
-          onClick={() => navigate("/content/new", { state: { list: listUrl } })}
+          onClick={() => navigate("/content/new", { state: { list: listUrl, schema: selected } })}
           disabled={!hasLiveSchema}
         >
           <Plus className="size-4" aria-hidden="true" />
