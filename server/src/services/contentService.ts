@@ -1,0 +1,279 @@
+import type { Db } from "../db/database";
+import { ContentRepository, ContentEntryRow } from "../repositories/contentRepo";
+import { SchemaRepository } from "../repositories/schemaRepo";
+import type { FieldWithId, SchemaEntry } from "../types";
+
+export type ContentValue = string | number | boolean;
+
+export interface ContentEntry {
+  id: number;
+  schema: string;
+  schema_version: number;
+  creation_date: string;
+  created_by: string;
+  last_modified_date: string;
+  last_modified_by: string;
+  values: Record<string, ContentValue>;
+}
+
+export interface ContentListEntry extends ContentEntry {
+  conflict: boolean;
+}
+
+export class ContentServiceError extends Error {
+  constructor(
+    public statusCode: number,
+    message: string,
+    public details?: Record<string, unknown>
+  ) {
+    super(message);
+  }
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isValidDateString(value: string): boolean {
+  if (!DATE_RE.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+export class ContentService {
+  private repo: ContentRepository;
+  private schemaRepo: SchemaRepository;
+
+  constructor(db: Db) {
+    this.repo = new ContentRepository(db);
+    this.schemaRepo = new SchemaRepository(db);
+  }
+
+  create(
+    schemaName: string,
+    values: Record<string, unknown>,
+    createdBy: string
+  ): ContentEntry {
+    const schema = this.requireSchema(schemaName);
+    const rows = this.buildRows(schema, null, values);
+    const id = this.repo.insert(schema.name, schema.version, createdBy, rows);
+    return this.toEntry(this.requireEntry(id), schema);
+  }
+
+  update(
+    entryId: number,
+    values: Record<string, unknown>,
+    modifiedBy: string
+  ): ContentEntry {
+    const existing = this.repo.getEntry(entryId);
+    if (!existing) {
+      throw new ContentServiceError(404, `Entry ${entryId} not found`);
+    }
+    const schema = this.requireSchema(existing.record.schema);
+    const rows = this.buildRows(schema, existing, values);
+    this.repo.replaceRows(entryId, schema.version, modifiedBy, rows);
+    return this.toEntry(this.requireEntry(entryId), schema);
+  }
+
+  delete(entryId: number): void {
+    const existing = this.repo.getEntry(entryId);
+    if (!existing) {
+      throw new ContentServiceError(404, `Entry ${entryId} not found`);
+    }
+    this.repo.delete(entryId);
+  }
+
+  listForSchema(schemaName: string): ContentListEntry[] {
+    const schema = this.requireSchema(schemaName);
+    return this.repo.listEntries(schemaName).map((entry) => this.toEntry(entry, schema, true));
+  }
+
+  listPublic(schemaName: string): ContentEntry[] {
+    const schema = this.requireSchema(schemaName);
+    return this.repo
+      .listEntries(schemaName)
+      .filter((entry) => entry.record.schema_version >= schema.compat_version)
+      .map((entry) => this.toEntry(entry, schema, false));
+  }
+
+  getPublic(schemaName: string, entryId: number): ContentEntry {
+    const schema = this.requireSchema(schemaName);
+    const entry = this.repo.getEntry(entryId);
+    if (!entry || entry.record.schema !== schemaName) {
+      throw new ContentServiceError(404, `Entry ${entryId} not found`);
+    }
+    if (entry.record.schema_version < schema.compat_version) {
+      throw new ContentServiceError(
+        422,
+        `Entry ${entryId} is in conflict with schema '${schemaName}' and must be re-edited`
+      );
+    }
+    return this.toEntry(entry, schema, false);
+  }
+
+  private requireSchema(schemaName: string): SchemaEntry {
+    const schema = this.schemaRepo.getSchema(schemaName);
+    if (!schema) {
+      throw new ContentServiceError(404, `Schema '${schemaName}' not found`);
+    }
+    return schema;
+  }
+
+  private requireEntry(id: number): ContentEntryRow {
+    const entry = this.repo.getEntry(id);
+    if (!entry) {
+      throw new ContentServiceError(404, `Entry ${id} not found`);
+    }
+    return entry;
+  }
+
+  private buildRows(
+    schema: SchemaEntry,
+    existing: ContentEntryRow | null,
+    values: Record<string, unknown>
+  ): Map<number, string> {
+    const knownIds = new Set(schema.fields.map((f) => f.id));
+    const submittedIds = new Set<number>();
+
+    for (const key of Object.keys(values)) {
+      const id = Number(key);
+      if (!Number.isInteger(id) || !knownIds.has(id)) {
+        throw new ContentServiceError(
+          422,
+          `Unknown field_id: ${key}`,
+          { fieldId: key }
+        );
+      }
+      submittedIds.add(id);
+    }
+
+    const rows = new Map<number, string>();
+
+    for (const field of schema.fields) {
+      const id = String(field.id);
+      const submitted = values[id];
+
+      if (submitted !== undefined && submitted !== null) {
+        this.validateSubmitted(field, submitted);
+        rows.set(field.id, JSON.stringify(submitted));
+        continue;
+      }
+
+      if (submitted === null) {
+        if (field.required) {
+          throw new ContentServiceError(
+            422,
+            `Missing required field '${field.label}'`
+          );
+        }
+        continue;
+      }
+
+      if (existing) {
+        const stored = existing.rows.find((r) => r.field_id === field.id)?.value;
+        if (stored !== null && stored !== undefined) {
+          const parsed = JSON.parse(stored) as unknown;
+          if (this.isValidValue(field, parsed)) {
+            rows.set(field.id, stored);
+            continue;
+          }
+          const coerced = this.coerce(field, parsed);
+          if (coerced !== null) {
+            rows.set(field.id, JSON.stringify(coerced));
+            continue;
+          }
+          throw new ContentServiceError(
+            422,
+            `Field '${field.label}' has a stored value invalid for its current type; re-enter a valid value`
+          );
+        }
+      }
+
+      if (field.required) {
+        throw new ContentServiceError(
+          422,
+          `Missing required field '${field.label}'`
+        );
+      }
+    }
+
+    return rows;
+  }
+
+  private validateSubmitted(field: FieldWithId, value: unknown): void {
+    if (this.isValidValue(field, value)) return;
+    throw new ContentServiceError(
+      422,
+      `Invalid value for field '${field.label}'`,
+      { fieldId: field.id }
+    );
+  }
+
+  private isValidValue(field: FieldWithId, value: unknown): boolean {
+    switch (field.type) {
+      case "text":
+        return typeof value === "string" && (!field.required || value.length > 0);
+      case "number":
+        return typeof value === "number" && Number.isFinite(value);
+      case "boolean":
+        return typeof value === "boolean";
+      case "date":
+        return typeof value === "string" && isValidDateString(value);
+      case "schema-ref":
+        return (
+          typeof value === "number" &&
+          Number.isInteger(value) &&
+          value > 0 &&
+          !!field.ref_schema &&
+          this.repo.entryExistsInSchema(value, field.ref_schema)
+        );
+      default:
+        return false;
+    }
+  }
+
+  private coerce(field: FieldWithId, value: unknown): unknown {
+    if (field.type === "text" && typeof value === "number") {
+      return String(value);
+    }
+    return null;
+  }
+
+  private toEntry(
+    entry: ContentEntryRow,
+    schema: SchemaEntry,
+    includeConflict: true
+  ): ContentListEntry;
+  private toEntry(
+    entry: ContentEntryRow,
+    schema: SchemaEntry,
+    includeConflict?: false
+  ): ContentEntry;
+  private toEntry(
+    entry: ContentEntryRow,
+    schema: SchemaEntry,
+    includeConflict = false
+  ): ContentEntry | ContentListEntry {
+    const values: Record<string, ContentValue> = {};
+    for (const row of entry.rows) {
+      values[String(row.field_id)] = JSON.parse(row.value ?? "null") as ContentValue;
+    }
+
+    const base: ContentEntry = {
+      id: entry.record.id,
+      schema: entry.record.schema,
+      schema_version: entry.record.schema_version,
+      creation_date: entry.record.creation_date,
+      created_by: entry.record.created_by,
+      last_modified_date: entry.record.last_modified_date,
+      last_modified_by: entry.record.last_modified_by,
+      values,
+    };
+
+    if (includeConflict) {
+      return {
+        ...base,
+        conflict: entry.record.schema_version < schema.compat_version,
+      };
+    }
+    return base;
+  }
+}

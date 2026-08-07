@@ -5,6 +5,9 @@ import { createSchemasRouter } from "./routes/schemas";
 import { SchemaService } from "./services/schemaService";
 import { createAuthRouter } from "./routes/auth";
 import { createUsersRouter } from "./routes/users";
+import { createEntriesRouter } from "./routes/entries";
+import { createContentRouter } from "./routes/content";
+import { ContentService } from "./services/contentService";
 import { requireAuth, requireRole } from "./auth/requireAuth";
 
 export interface HealthResponse {
@@ -17,6 +20,7 @@ export function createApp(db?: Db): express.Express {
 
   const database = db ?? openDatabase();
   const schemaService = new SchemaService(database);
+  const contentService = new ContentService(database);
 
   app.get("/api/health", (_req, res) => {
     const body: HealthResponse = { status: "ok" };
@@ -30,6 +34,15 @@ export function createApp(db?: Db): express.Express {
   // Schemas routes — editor only
   const schemasRouter = createSchemasRouter(schemaService);
   app.use("/api/schemas", requireAuth, requireRole("editor"), schemasRouter);
+
+  // Content routes — editor only
+  const entriesRouter = createEntriesRouter(contentService);
+  app.use("/api/schemas/:name/entries", requireAuth, requireRole("editor"), entriesRouter);
+  app.use("/api/entries", requireAuth, requireRole("editor"), entriesRouter);
+
+  // Public data API — no auth (R20)
+  const contentRouter = createContentRouter(contentService);
+  app.use("/api/content", contentRouter);
 
   // Users routes — admin only
   const usersRouter = createUsersRouter(database);
