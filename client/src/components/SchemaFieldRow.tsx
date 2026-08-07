@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { FIELD_TYPE_LABELS, FIELD_TYPES, type FieldType } from "@/lib/api";
+import { FIELD_GRID_TEMPLATE } from "@/lib/schemaGrid";
 import type { SchemaDraft } from "@/hooks/useSchemas";
 
 export interface SchemaFieldRowProps {
@@ -40,16 +41,9 @@ export function SchemaFieldRow({
 
   return (
     <li className="border-b p-3 last:border-b-0">
-      <div className="grid grid-cols-[minmax(0,1fr)_7.5rem_auto_auto] items-center gap-2">
-        <Input
-          value={field.label}
-          disabled={disabled}
-          onChange={(event) => onChange(index, { label: event.target.value })}
-          aria-label={`Field ${index + 1} label`}
-          placeholder="Field label"
-        />
+      <div className={FIELD_GRID_TEMPLATE}>
         <Select value={field.type} disabled={disabled} onValueChange={(value) => onChange(index, { type: value as FieldType })}>
-          <SelectTrigger aria-label={`Field ${index + 1} type`}>
+          <SelectTrigger className="w-full" aria-label={`Field ${index + 1} type`}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -60,6 +54,13 @@ export function SchemaFieldRow({
             ))}
           </SelectContent>
         </Select>
+        <Input
+          value={field.label}
+          disabled={disabled}
+          onChange={(event) => onChange(index, { label: event.target.value })}
+          aria-label={`Field ${index + 1} label`}
+          placeholder="Field label"
+        />
         <Checkbox
           checked={field.required}
           disabled={disabled}
