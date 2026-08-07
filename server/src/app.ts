@@ -28,7 +28,7 @@ export function createApp(db?: Db): express.Express {
   app.use("/api/auth", authRouter);
 
   // Schemas routes — editor only
-  const schemasRouter = createSchemasRouter(schemaService, "editor");
+  const schemasRouter = createSchemasRouter(schemaService);
   app.use("/api/schemas", requireAuth, requireRole("editor"), schemasRouter);
 
   // Users routes — admin only

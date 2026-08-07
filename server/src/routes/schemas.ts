@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import type { SchemaService } from "../services/schemaService";
 import type { FieldInput } from "../types";
+import type { AuthRequest } from "../auth/requireAuth";
 
 interface ServiceError {
   statusCode: number;
@@ -11,10 +12,7 @@ function isErrorWithStatus(err: unknown): err is ServiceError {
   return typeof err === "object" && err !== null && "statusCode" in err && "message" in err;
 }
 
-export function createSchemasRouter(
-  schemaService: SchemaService,
-  _user: string = "system"
-): Router {
+export function createSchemasRouter(schemaService: SchemaService): Router {
   const router: Router = Router();
 
   router.get("/", (_req: Request, res: Response) => {
@@ -50,7 +48,8 @@ export function createSchemasRouter(
   router.post("/", (req: Request, res: Response) => {
     try {
       const { name, fields }: { name: string; fields: FieldInput[] } = req.body;
-      const schema = schemaService.create(name, fields, _user);
+      const user = (req as AuthRequest).user.login;
+      const schema = schemaService.create(name, fields, user);
       res.status(201).json(schema);
     } catch (err) {
       if (isErrorWithStatus(err)) {
@@ -65,7 +64,8 @@ export function createSchemasRouter(
     try {
       const name = typeof req.params.name === "string" ? req.params.name : "";
       const fields = req.body.fields;
-      const schema = schemaService.update(name, fields, _user);
+      const user = (req as AuthRequest).user.login;
+      const schema = schemaService.update(name, fields, user);
       res.json(schema);
     } catch (err) {
       if (isErrorWithStatus(err)) {

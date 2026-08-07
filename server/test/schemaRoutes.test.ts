@@ -10,7 +10,11 @@ function createTestApp() {
   const schemaService = new SchemaService(db);
   const app = express();
   app.use(express.json());
-  app.use("/api/schemas", createSchemasRouter(schemaService, "editor1"));
+  app.use((_req, _res, next) => {
+    (_req as any).user = { login: "editor1", role: "editor" };
+    next();
+  });
+  app.use("/api/schemas", createSchemasRouter(schemaService));
   return { app, db, schemaService };
 }
 
