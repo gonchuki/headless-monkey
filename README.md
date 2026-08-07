@@ -25,3 +25,11 @@ pnpm dev      # runs server + client; client proxies /api to the server
 pnpm test     # runs server tests (vitest)
 pnpm build    # builds both packages
 ```
+
+## How to use
+
+On first run, login with the `admin` user and the `ADMIN_PASSWORD` from `.env`
+
+The only role for admins is to provision user profiles, so you will need to create at least one editor in order to access the control panel UI.
+
+Then, login with an `editor` profile and start interacting with the CMS.
