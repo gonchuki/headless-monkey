@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/toast";
 import { useSchemaEntryCount, useSchemas, type SchemaDraft } from "@/hooks/useSchemas";
-import { ApiError, apiFetch, type SchemaEntry, type SchemaFieldInput } from "@/lib/api";
+import { apiFetch, type SchemaEntry, type SchemaFieldInput } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 
 interface EditorState {
@@ -106,15 +106,15 @@ export default function SchemaEditorPage() {
   const schemaQuery = useQuery({
     queryKey: queryKeys.schema(name),
     queryFn: () => apiFetch<SchemaEntry>(`/api/schemas/${encodeURIComponent(name)}`),
+    enabled: !isCreateRoute,
   });
 
   const { listQuery, create, update } = useSchemas();
   const [state, dispatch] = useReducer(editorReducer, initialState);
   const [fieldToDelete, setFieldToDelete] = useState<number | null>(null);
 
-  const isCreate = isCreateRoute && schemaQuery.error instanceof ApiError && schemaQuery.error.status === 404;
+  const isCreate = isCreateRoute;
   const schemaMissing = !isCreateRoute && schemaQuery.isError;
-  const loadError = isCreateRoute && schemaQuery.isError && !isCreate;
 
   useEffect(() => {
     dispatch({ type: "RESET", name: isCreateRoute ? "" : name });
@@ -195,11 +195,11 @@ export default function SchemaEditorPage() {
     }
   }
 
-  if (schemaQuery.isPending) {
+  if (!isCreateRoute && schemaQuery.isPending) {
     return <PageSkeleton />;
   }
 
-  if (schemaMissing || loadError) {
+  if (schemaMissing) {
     return (
       <div className="mx-auto max-w-2xl space-y-4">
         <div className="flex items-center gap-3">
