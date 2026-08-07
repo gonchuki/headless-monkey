@@ -5,7 +5,8 @@ import { config as loadEnv } from "dotenv";
 // must be resolved relative to this file, not the cwd. `src/config` and the
 // compiled `dist/config` are the same depth, so ../../../ works for both tsx
 // and node runs.
-loadEnv({ path: path.resolve(__dirname, "../../../.env") });
+const REPO_ROOT = path.resolve(__dirname, "../../../");
+loadEnv({ path: path.resolve(REPO_ROOT, ".env") });
 
 export interface AppEnv {
   adminPassword: string;
@@ -14,15 +15,26 @@ export interface AppEnv {
   databasePath: string;
 }
 
+// Filtered pnpm scripts run with the package dir as cwd, so relative paths
+// like `./data/headless-monkey.db` must be anchored at the repo root, not the
+// cwd. Absolute paths are returned untouched.
+function resolveDatabasePath(dbPath: string): string {
+  if (path.isAbsolute(dbPath)) {
+    return dbPath;
+  }
+  return path.resolve(REPO_ROOT, dbPath);
+}
+
 export function loadAppEnv(overrides: Partial<AppEnv> = {}): AppEnv {
   return {
     adminPassword: overrides.adminPassword ?? process.env.ADMIN_PASSWORD ?? "",
     jwtSecret: overrides.jwtSecret ?? process.env.JWT_SECRET ?? "",
     port: overrides.port ?? Number(process.env.PORT ?? 4000),
-    databasePath:
+    databasePath: resolveDatabasePath(
       overrides.databasePath ??
-      process.env.DATABASE_PATH ??
-      "./data/headless-monkey.db",
+        process.env.DATABASE_PATH ??
+        "./data/headless-monkey.db"
+    ),
   };
 }
 
