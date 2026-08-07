@@ -1,0 +1,67 @@
+import { useQuery } from "@tanstack/react-query";
+import { Skeleton } from "@/components/Skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { apiFetch, type ContentListEntry, type ContentValue, type SchemaEntry, type SchemaField } from "@/lib/api";
+import { entryLabel, schemaLabelField } from "@/lib/entries";
+import { queryKeys } from "@/lib/query";
+
+export interface ReferenceSelectProps {
+  field: SchemaField;
+  value: ContentValue | null;
+  disabled?: boolean;
+  invalid?: boolean;
+  onChange: (value: ContentValue | null) => void;
+}
+
+export function ReferenceSelect({
+  field,
+  value,
+  disabled = false,
+  invalid = false,
+  onChange,
+}: ReferenceSelectProps) {
+  const refSchema = field.ref_schema;
+
+  const schemaQuery = useQuery({
+    queryKey: queryKeys.schema(refSchema ?? ""),
+    queryFn: () => apiFetch<SchemaEntry>(`/api/schemas/${encodeURIComponent(refSchema ?? "")}`),
+    enabled: refSchema != null,
+  });
+
+  const entriesQuery = useQuery({
+    queryKey: queryKeys.entries(refSchema ?? ""),
+    queryFn: () => apiFetch<ContentListEntry[]>(`/api/schemas/${encodeURIComponent(refSchema ?? "")}/entries`),
+    enabled: refSchema != null,
+  });
+
+  if (schemaQuery.isPending || entriesQuery.isPending) {
+    return <Skeleton className="h-8 w-full" />;
+  }
+
+  const labelFieldId = schemaQuery.data ? schemaLabelField(schemaQuery.data) : null;
+  const entries = entriesQuery.data ?? [];
+
+  return (
+    <Select
+      value={typeof value === "number" ? String(value) : null}
+      onValueChange={(selected) => onChange(typeof selected === "string" ? Number(selected) : null)}
+    >
+      <SelectTrigger disabled={disabled || entries.length === 0} aria-invalid={invalid}>
+        <SelectValue placeholder={entries.length === 0 ? "No entries to reference" : "Select an entry"} />
+      </SelectTrigger>
+      <SelectContent>
+        {entries.map((entry) => (
+          <SelectItem key={entry.id} value={String(entry.id)}>
+            {entryLabel(entry, labelFieldId)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}

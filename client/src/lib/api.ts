@@ -51,6 +51,23 @@ export interface SchemaEntryRow {
   conflict: boolean;
 }
 
+export type ContentValue = string | number | boolean;
+
+export interface ContentEntry {
+  id: number;
+  schema: string;
+  schema_version: number;
+  creation_date: string;
+  created_by: string;
+  last_modified_date: string;
+  last_modified_by: string;
+  values: Record<string, ContentValue>;
+}
+
+export interface ContentListEntry extends ContentEntry {
+  conflict: boolean;
+}
+
 export const TOKEN_STORAGE_KEY = "headless-monkey.token";
 export const AUTH_UNAUTHORIZED_EVENT = "headless-monkey:unauthorized";
 

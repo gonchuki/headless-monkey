@@ -10,7 +10,9 @@ import LoginPage from "@/routes/LoginPage";
 import AdminUsersPage from "@/routes/AdminUsersPage";
 import SchemaEditorPage from "@/routes/SchemaEditorPage";
 import SchemasPage from "@/routes/SchemasPage";
-import PlaceholderPage from "@/routes/PlaceholderPage";
+import ContentPage from "@/routes/ContentPage";
+import ContentEditorPage from "@/routes/ContentEditorPage";
+import NewContentPage from "@/routes/NewContentPage";
 import "@/index.css";
 
 const router = createBrowserRouter([
@@ -47,7 +49,7 @@ const router = createBrowserRouter([
         path: "/content",
         element: (
           <RequireRole role="editor">
-            <PlaceholderPage title="Content" />
+            <ContentPage />
           </RequireRole>
         ),
       },
@@ -55,7 +57,7 @@ const router = createBrowserRouter([
         path: "/content/new",
         element: (
           <RequireRole role="editor">
-            <PlaceholderPage title="New content" />
+            <NewContentPage />
           </RequireRole>
         ),
       },
@@ -63,7 +65,7 @@ const router = createBrowserRouter([
         path: "/content/:schema/:id",
         element: (
           <RequireRole role="editor">
-            <PlaceholderPage title="Content editor" />
+            <ContentEditorPage />
           </RequireRole>
         ),
       },
