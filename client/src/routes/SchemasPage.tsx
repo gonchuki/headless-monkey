@@ -92,13 +92,13 @@ export default function SchemasPage() {
                   deleted && "pointer-events-none opacity-50",
                 )}
               >
+                <span
+                  className="inline-block size-4 shrink-0 rounded-full"
+                  style={{ backgroundColor: schemaColor(schema.name).background }}
+                  aria-hidden="true"
+                />
                 <div className="min-w-0 flex-1 text-left">
                   <p className="truncate text-sm font-medium">
-                    <span
-                      className="inline-block size-4 shrink-0 rounded-full"
-                      style={{ backgroundColor: schemaColor(schema.name).background }}
-                      aria-hidden="true"
-                    />
                     {schema.name}
                   </p>
                   <p className="text-xs text-muted-foreground">
