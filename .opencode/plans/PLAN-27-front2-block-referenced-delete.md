@@ -58,4 +58,6 @@ This plan requires Front 1 (PLAN-26) — refs live in `content_refs`; without it
 
 ## Verify notes
 
+The dev `data/` DB must be wiped before running `pnpm dev` as per PLAN-24's dev-DB note (the new baseline table).
+
 Server: `pnpm --filter server test`. Client: `pnpm --filter client typecheck` then `pnpm --filter client build`. Manual sanity (optional, since no client test harness exists): create person + referenced car entries in the UI, open delete on the person entry, confirm the dialog warns with the count and the server 409s; also create two car entries (and a car with two fields pointing at the same person) to confirm the count reads as distinct entries.

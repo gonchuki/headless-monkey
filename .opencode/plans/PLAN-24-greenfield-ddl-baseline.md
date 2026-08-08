@@ -54,3 +54,9 @@ The plan also collapses the manual cascade deletes that the DDL now handles auto
 6. `schemaRepo.deleteSchema` contains exactly one DELETE statement against `schemas` and no statement against `content_rows`, `content`, or `schema_fields`. (Verifiable by reading `server/src/repositories/schemaRepo.ts` — the verdict is statement presence/absence.)
 7. `schemaRepo.updateSchemaFields` contains no statement `DELETE FROM content_rows WHERE field_id IN ...` and still contains the `UPDATE content SET schema_version = ?` bump. (Verifiable by reading the file.)
 8. `git diff` over the changes made by this plan touches exactly `server/src/db/migrations.ts`, `server/src/repositories/schemaRepo.ts`, and `server/test/database.test.ts` — no changes in `server/src/services/contentService.ts` or `server/src/repositories/contentRepo.ts` (the ref-table switch is a later plan), and no changes under `client/`.
+
+## Verify notes
+
+`pnpm --filter server test` then `pnpm --filter server build`.
+
+**Dev DB wipe (required, BREAKING).** This plan changes the SQL behind the migration name `001_initial_schema`, so an existing dev DB created by the old `001_create_tables` is skipped (the runner only tracks names). Before running `pnpm dev`, delete the repo-root `data/` DB files — `headless-monkey.db` plus its `-wal`/`-shm` siblings (from `DATABASE_PATH`, PLAN-14) — so a fresh DB is created on the next boot. Tests are unaffected because they use fresh in-memory/temp DBs.
