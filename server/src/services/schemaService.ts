@@ -206,13 +206,35 @@ export class SchemaService {
       }
     }
 
+    // Determine retargeted field IDs (R35): an incoming field that carries an
+    // existing id, is a schema-ref on both sides, and changed its ref_schema.
+    // Propagating a retarget purges the field's content_refs (no version bump);
+    // the entries stay conflicted because the retarget already made
+    // compat_version = newVersion above.
+    const existingById = new Map(existing.fields.map((f) => [f.id, f]));
+    const retargetedFieldIds: number[] = [];
+    for (const f of fields) {
+      if ("id" in f && typeof f.id === "number") {
+        const old = existingById.get(f.id);
+        if (
+          old &&
+          old.type === "schema-ref" &&
+          f.type === "schema-ref" &&
+          old.ref_schema !== f.ref_schema
+        ) {
+          retargetedFieldIds.push(f.id);
+        }
+      }
+    }
+
     this.repo.updateSchemaFields(
       name,
       fields,
       newVersion,
       compatVersion,
       modifiedBy,
-      deletedFieldIds
+      deletedFieldIds,
+      retargetedFieldIds
     );
 
     return this.repo.getSchema(name)!;
