@@ -15,9 +15,17 @@ export interface ContentRow {
   value: string | null;
 }
 
+export interface ContentRef {
+  field_id: number;
+  target_content_id: number;
+}
+
 export interface ContentEntryRow {
   record: ContentRecord;
+  /** Scalar rows only (text|number|boolean|date) — schema-ref values never live here. */
   rows: ContentRow[];
+  /** Normalized schema-ref edges, one per (content_id, field_id), ordered by field_id. */
+  refs: ContentRef[];
 }
 
 export class ContentRepository {
@@ -27,7 +35,8 @@ export class ContentRepository {
     schema: string,
     schemaVersion: number,
     createdBy: string,
-    values: Map<number, string>
+    values: Map<number, string>,
+    refs: Map<number, number> = new Map()
   ): number {
     const now = new Date().toISOString();
     const insertContent = this.db.prepare(
@@ -35,6 +44,9 @@ export class ContentRepository {
     );
     const insertRow = this.db.prepare(
       "INSERT INTO content_rows (content_id, field_id, value) VALUES (?, ?, ?)"
+    );
+    const insertRef = this.db.prepare(
+      "INSERT INTO content_refs (content_id, field_id, target_content_id) VALUES (?, ?, ?)"
     );
 
     const tx = this.db.transaction(() => {
@@ -50,6 +62,9 @@ export class ContentRepository {
       for (const [fieldId, value] of values) {
         insertRow.run(id, fieldId, value);
       }
+      for (const [fieldId, targetContentId] of refs) {
+        insertRef.run(id, fieldId, targetContentId);
+      }
       return id;
     });
 
@@ -60,17 +75,25 @@ export class ContentRepository {
     id: number,
     schemaVersion: number,
     modifiedBy: string,
-    values: Map<number, string>
+    values: Map<number, string>,
+    refs: Map<number, number> = new Map()
   ): void {
     const now = new Date().toISOString();
     const insertRow = this.db.prepare(
       "INSERT INTO content_rows (content_id, field_id, value) VALUES (?, ?, ?)"
     );
+    const insertRef = this.db.prepare(
+      "INSERT INTO content_refs (content_id, field_id, target_content_id) VALUES (?, ?, ?)"
+    );
 
     const tx = this.db.transaction(() => {
       this.db.prepare("DELETE FROM content_rows WHERE content_id = ?").run(id);
+      this.db.prepare("DELETE FROM content_refs WHERE content_id = ?").run(id);
       for (const [fieldId, value] of values) {
         insertRow.run(id, fieldId, value);
+      }
+      for (const [fieldId, targetContentId] of refs) {
+        insertRef.run(id, fieldId, targetContentId);
       }
       this.db
         .prepare(
@@ -101,7 +124,13 @@ export class ContentRepository {
       )
       .all(id) as ContentRow[];
 
-    return { record, rows };
+    const refs = this.db
+      .prepare(
+        "SELECT field_id, target_content_id FROM content_refs WHERE content_id = ? ORDER BY field_id"
+      )
+      .all(id) as ContentRef[];
+
+    return { record, rows, refs };
   }
 
   listEntries(schema: string): ContentEntryRow[] {
@@ -117,7 +146,12 @@ export class ContentRepository {
           "SELECT field_id, value FROM content_rows WHERE content_id = ? ORDER BY field_id"
         )
         .all(record.id) as ContentRow[];
-      return { record, rows };
+      const refs = this.db
+        .prepare(
+          "SELECT field_id, target_content_id FROM content_refs WHERE content_id = ? ORDER BY field_id"
+        )
+        .all(record.id) as ContentRef[];
+      return { record, rows, refs };
     });
   }
 

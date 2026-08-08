@@ -51,6 +51,13 @@ function isValidDateString(value: string): boolean {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
+interface BuiltEntryValues {
+  /** Scalar rows (text|number|boolean|date) to store in content_rows. */
+  rows: Map<number, string>;
+  /** Schema-ref targets (field_id → target content id) to store in content_refs. */
+  refs: Map<number, number>;
+}
+
 export class ContentService {
   private repo: ContentRepository;
   private schemaRepo: SchemaRepository;
@@ -66,8 +73,14 @@ export class ContentService {
     createdBy: string
   ): ContentEntry {
     const schema = this.requireSchema(schemaName);
-    const rows = this.buildRows(schema, null, values);
-    const id = this.repo.insert(schema.name, schema.version, createdBy, rows);
+    const built = this.buildRows(schema, null, values);
+    const id = this.repo.insert(
+      schema.name,
+      schema.version,
+      createdBy,
+      built.rows,
+      built.refs
+    );
     return this.toEntry(this.requireEntry(id), schema, false, "editor");
   }
 
@@ -81,8 +94,14 @@ export class ContentService {
       throw new ContentServiceError(404, `Entry ${entryId} not found`);
     }
     const schema = this.requireSchema(existing.record.schema);
-    const rows = this.buildRows(schema, existing, values);
-    this.repo.replaceRows(entryId, schema.version, modifiedBy, rows);
+    const built = this.buildRows(schema, existing, values);
+    this.repo.replaceRows(
+      entryId,
+      schema.version,
+      modifiedBy,
+      built.rows,
+      built.refs
+    );
     return this.toEntry(this.requireEntry(entryId), schema, false, "editor");
   }
 
@@ -150,7 +169,7 @@ export class ContentService {
     schema: SchemaEntry,
     existing: ContentEntryRow | null,
     values: Record<string, unknown>
-  ): Map<number, string> {
+  ): BuiltEntryValues {
     const knownIds = new Set(schema.fields.map((f) => f.id));
     const submittedIds = new Set<number>();
 
@@ -167,6 +186,7 @@ export class ContentService {
     }
 
     const rows = new Map<number, string>();
+    const refs = new Map<number, number>();
 
     for (const field of schema.fields) {
       const id = String(field.id);
@@ -174,7 +194,11 @@ export class ContentService {
 
       if (submitted !== undefined && submitted !== null) {
         this.validateSubmitted(field, submitted);
-        rows.set(field.id, JSON.stringify(submitted));
+        if (field.type === "schema-ref") {
+          refs.set(field.id, submitted as number);
+        } else {
+          rows.set(field.id, JSON.stringify(submitted));
+        }
         continue;
       }
 
@@ -189,22 +213,36 @@ export class ContentService {
       }
 
       if (existing) {
-        const stored = existing.rows.find((r) => r.field_id === field.id)?.value;
-        if (stored !== null && stored !== undefined) {
-          const parsed = JSON.parse(stored) as unknown;
-          if (this.isValidValue(field, parsed)) {
-            rows.set(field.id, stored);
+        if (field.type === "schema-ref") {
+          const storedRef = existing.refs.find((r) => r.field_id === field.id);
+          if (storedRef) {
+            if (!this.isValidValue(field, storedRef.target_content_id)) {
+              throw new ContentServiceError(
+                422,
+                `Field '${field.label}' has a stored reference invalid for its current type; re-enter a valid value`
+              );
+            }
+            refs.set(field.id, storedRef.target_content_id);
             continue;
           }
-          const coerced = this.coerce(field, parsed);
-          if (coerced !== null) {
-            rows.set(field.id, JSON.stringify(coerced));
-            continue;
+        } else {
+          const stored = existing.rows.find((r) => r.field_id === field.id)?.value;
+          if (stored !== null && stored !== undefined) {
+            const parsed = JSON.parse(stored) as unknown;
+            if (this.isValidValue(field, parsed)) {
+              rows.set(field.id, stored);
+              continue;
+            }
+            const coerced = this.coerce(field, parsed);
+            if (coerced !== null) {
+              rows.set(field.id, JSON.stringify(coerced));
+              continue;
+            }
+            throw new ContentServiceError(
+              422,
+              `Field '${field.label}' has a stored value invalid for its current type; re-enter a valid value`
+            );
           }
-          throw new ContentServiceError(
-            422,
-            `Field '${field.label}' has a stored value invalid for its current type; re-enter a valid value`
-          );
         }
       }
 
@@ -216,7 +254,7 @@ export class ContentService {
       }
     }
 
-    return rows;
+    return { rows, refs };
   }
 
   private validateSubmitted(field: FieldWithId, value: unknown): void {
@@ -277,19 +315,32 @@ export class ContentService {
     shape: EntryShape = "public"
   ): ContentEntry | ContentListEntry {
     const fieldsById = new Map(schema.fields.map((f) => [f.id, f]));
+    const refsByField = new Map<number, number>(
+      entry.refs.map((r) => [r.field_id, r.target_content_id])
+    );
     const values: Record<string, ContentValue> = {};
+
     for (const row of entry.rows) {
       const field = fieldsById.get(row.field_id);
-      if (!field) continue;
+      if (!field || field.type === "schema-ref") continue;
       const parsed = JSON.parse(row.value ?? "null") as ContentValue;
       if (shape === "editor") {
         values[String(field.id)] = parsed;
-        continue;
+      } else {
+        values[field.label] = parsed;
       }
-      values[field.label] =
-        field.type === "schema-ref" && typeof parsed === "number" && field.ref_schema
-          ? { id: parsed, schema: field.ref_schema }
-          : parsed;
+    }
+
+    for (const [fieldId, targetContentId] of refsByField) {
+      const field = fieldsById.get(fieldId);
+      if (!field || field.type !== "schema-ref") continue;
+      if (shape === "editor") {
+        values[String(field.id)] = targetContentId;
+      } else {
+        values[field.label] = field.ref_schema
+          ? { id: targetContentId, schema: field.ref_schema }
+          : targetContentId;
+      }
     }
 
     const base: ContentEntry = {
