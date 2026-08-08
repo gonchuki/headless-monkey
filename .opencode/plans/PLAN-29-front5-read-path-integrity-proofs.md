@@ -52,4 +52,4 @@ This is primarily a `server/test` plan with at most trivial, in-file test-helper
 
 ## Verify notes
 
-`pnpm --filter server test`. If a new test file is created, ensure it's discovered by the existing vitest config (default `test/**/*.test.ts` glob — confirm by running the suite).
+`pnpm --filter server test`. If a new test file is created, ensure it is discovered by the existing vitest config (default `test/**/*.test.ts` glob — confirm by running the suite). The dev `data/` DB must be wiped before running `pnpm dev` as per PLAN-24's dev-DB note (the new baseline table).

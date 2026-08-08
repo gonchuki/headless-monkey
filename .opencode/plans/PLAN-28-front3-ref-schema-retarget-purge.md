@@ -57,4 +57,4 @@ Mirror R21's propagation but scoped to *retargeted* fields: purge the field's `c
 
 ## Verify notes
 
-`pnpm --filter server test` then `pnpm --filter server build`. The R35 wording in `SPEC.md` is owned by PLAN-23 (executed first); this plan implements exactly that contract.
+`pnpm --filter server test` then `pnpm --filter server build`. The dev `data/` DB must be wiped before running `pnpm dev` as per PLAN-24's dev-DB note (the new baseline table). The R35 wording in `SPEC.md` is owned by PLAN-23 (executed first); this plan implements exactly that contract.
