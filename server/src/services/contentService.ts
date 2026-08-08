@@ -23,6 +23,8 @@ export interface ContentEntry {
 
 export interface ContentListEntry extends ContentEntry {
   conflict: boolean;
+  /** Distinct entries that reference this one via a schema-ref (R34 warning). */
+  referencer_count: number;
 }
 
 /**
@@ -109,6 +111,17 @@ export class ContentService {
     const existing = this.repo.getEntry(entryId);
     if (!existing) {
       throw new ContentServiceError(404, `Entry ${entryId} not found`);
+    }
+    // R34: an entry referenced by any other entry's schema-ref cannot be
+    // deleted. The count is the distinct-referencing-entry count (one entry
+    // with two refs to this target still counts as one).
+    const referencerCount = this.repo.countReferencesTo(entryId);
+    if (referencerCount > 0) {
+      throw new ContentServiceError(
+        409,
+        `Cannot delete entry ${entryId}: referenced by ${referencerCount} other ${referencerCount === 1 ? "entry" : "entries"}`,
+        { referencerCount }
+      );
     }
     this.repo.delete(entryId);
   }
@@ -358,6 +371,7 @@ export class ContentService {
       return {
         ...base,
         conflict: entry.record.schema_version < schema.compat_version,
+        referencer_count: entry.record.referencer_count,
       };
     }
     return base;

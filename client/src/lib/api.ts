@@ -66,6 +66,8 @@ export interface ContentEntry {
 
 export interface ContentListEntry extends ContentEntry {
   conflict: boolean;
+  /** Distinct entries that reference this one via a schema-ref (R34 warning). */
+  referencer_count: number;
 }
 
 export const TOKEN_STORAGE_KEY = "headless-monkey.token";
