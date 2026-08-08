@@ -33,7 +33,7 @@ function expectStatus(fn: () => unknown, status: number): void {
 
 describe("ContentService", () => {
   describe("serialization (§7 example)", () => {
-    it("exposes the full §4 shape and §7 values keyed by field id (ids 12-16)", () => {
+    it("exposes the full §4 shape and §7 values keyed by field label with schema-ref enrichment (ids 12-16)", () => {
       const { schemaService, contentService } = setup();
 
       makeSchema(schemaService, "person", [
@@ -72,11 +72,11 @@ describe("ContentService", () => {
       );
 
       expect(entry.values).toEqual({
-        "12": "Civic",
-        "13": 2019,
-        "14": true,
-        "15": "2021-05-04",
-        "16": personEntry.id,
+        make: "Civic",
+        year: 2019,
+        active: true,
+        built: "2021-05-04",
+        owner: { id: personEntry.id, schema: "person" },
       });
       expect(Object.keys(entry).sort()).toEqual([
         "created_by",
@@ -90,6 +90,13 @@ describe("ContentService", () => {
       ]);
       expect(entry.schema).toBe("car");
       expect(entry.schema_version).toBe(1);
+
+      // Public endpoints serialize the same label-keyed, enriched shape
+      expect(contentService.listPublic("car")[0].values).toEqual(entry.values);
+      expect(contentService.getPublic("car", entry.id).values.owner).toEqual({
+        id: personEntry.id,
+        schema: "person",
+      });
     });
   });
 
@@ -200,7 +207,7 @@ describe("ContentService", () => {
       );
 
       const updated = contentService.update(entry.id, {}, "editor1");
-      expect(updated.values["1"]).toBe("2019");
+      expect(updated.values.year).toBe("2019");
       expect(updated.schema_version).toBe(2);
     });
 
@@ -221,7 +228,7 @@ describe("ContentService", () => {
       expectStatus(() => contentService.update(entry.id, {}, "editor1"), 422);
 
       const fixed = contentService.update(entry.id, { "1": 2019 }, "editor1");
-      expect(fixed.values["1"]).toBe(2019);
+      expect(fixed.values.year).toBe(2019);
       expect(fixed.schema_version).toBe(2);
     });
   });
@@ -250,8 +257,8 @@ describe("ContentService", () => {
       contentService.update(entry.id, { "2": "VIN123" }, "editor1");
 
       expect(contentService.listForSchema("car")[0].conflict).toBe(false);
-      expect(contentService.getPublic("car", entry.id).values["1"]).toBe("Civic");
-      expect(contentService.getPublic("car", entry.id).values["2"]).toBe("VIN123");
+      expect(contentService.getPublic("car", entry.id).values.make).toBe("Civic");
+      expect(contentService.getPublic("car", entry.id).values.vin).toBe("VIN123");
     });
 
     it("listForSchema returns all entries with a conflict flag; listPublic only valid ones", () => {

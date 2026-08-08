@@ -3,7 +3,12 @@ import { ContentRepository, ContentEntryRow } from "../repositories/contentRepo"
 import { SchemaRepository } from "../repositories/schemaRepo";
 import type { FieldWithId, SchemaEntry } from "../types";
 
-export type ContentValue = string | number | boolean;
+export interface SchemaRefValue {
+  id: number;
+  schema: string;
+}
+
+export type ContentValue = string | number | boolean | SchemaRefValue;
 
 export interface ContentEntry {
   id: number;
@@ -258,9 +263,16 @@ export class ContentService {
     schema: SchemaEntry,
     includeConflict = false
   ): ContentEntry | ContentListEntry {
+    const fieldsById = new Map(schema.fields.map((f) => [f.id, f]));
     const values: Record<string, ContentValue> = {};
     for (const row of entry.rows) {
-      values[String(row.field_id)] = JSON.parse(row.value ?? "null") as ContentValue;
+      const field = fieldsById.get(row.field_id);
+      if (!field) continue;
+      const parsed = JSON.parse(row.value ?? "null") as ContentValue;
+      values[field.label] =
+        field.type === "schema-ref" && typeof parsed === "number" && field.ref_schema
+          ? { id: parsed, schema: field.ref_schema }
+          : parsed;
     }
 
     const base: ContentEntry = {

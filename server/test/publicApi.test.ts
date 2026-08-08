@@ -61,7 +61,7 @@ describe("Public content API (R18-R20)", () => {
 
       const res = await request(app).get(`/api/content/car/${created.body.id}`);
       expect(res.status).toBe(200);
-      expect(res.body.values[String(makeField.id)]).toBe("Civic");
+      expect(res.body.values.make).toBe("Civic");
     });
   });
 
@@ -116,7 +116,7 @@ describe("Public content API (R18-R20)", () => {
       expect(list.status).toBe(200);
       expect(list.body.length).toBe(1);
       expect(list.body[0].id).toBe(e1.body.id);
-      expect(list.body[0].values[String(makeField.id)]).toBe("Civic");
+      expect(list.body[0].values.make).toBe("Civic");
     });
 
     it("returns 404 for an unknown schema", async () => {
@@ -142,8 +142,56 @@ describe("Public content API (R18-R20)", () => {
       expect(res.body.id).toBe(created.body.id);
       expect(res.body.schema).toBe("car");
       expect(res.body.schema_version).toBe(1);
-      expect(res.body.values).toEqual({ [String(makeField.id)]: "Civic" });
+      expect(res.body.values).toEqual({ make: "Civic" });
       expect(res.body).not.toHaveProperty("conflict");
+    });
+
+    it("enriches schema-ref values as {id, schema} keyed by field label", async () => {
+      const { app, schemaService } = createTestApp();
+      schemaService.create(
+        "person",
+        [{ label: "name", type: "text", required: true }],
+        "editor1"
+      );
+      const car = schemaService.create(
+        "car",
+        [
+          { label: "make", type: "text", required: true },
+          { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        ],
+        "editor1"
+      );
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const token = editorToken();
+
+      const person = await request(app)
+        .post("/api/schemas/person/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { "1": "Alice" } });
+      expect(person.status).toBe(201);
+
+      const created = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          values: {
+            [String(makeField.id)]: "Civic",
+            [String(ownerField.id)]: person.body.id,
+          },
+        });
+      expect(created.status).toBe(201);
+      expect(created.body.values.owner).toEqual({
+        id: person.body.id,
+        schema: "person",
+      });
+
+      const res = await request(app).get(`/api/content/car/${created.body.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.values).toEqual({
+        make: "Civic",
+        owner: { id: person.body.id, schema: "person" },
+      });
     });
 
     it("returns 404 for an unknown id", async () => {
@@ -227,8 +275,8 @@ describe("Public content API (R18-R20)", () => {
       expect(created.status).toBe(201);
       expect(created.body.schema).toBe("car");
       expect(created.body.values).toEqual({
-        [String(makeField.id)]: "Civic",
-        [String(yearField.id)]: 2019,
+        make: "Civic",
+        year: 2019,
       });
 
       const list = await request(app)
@@ -243,8 +291,8 @@ describe("Public content API (R18-R20)", () => {
         .set("Authorization", `Bearer ${token}`)
         .send({ values: { [String(makeField.id)]: "Accord", [String(yearField.id)]: 2020 } });
       expect(patched.status).toBe(200);
-      expect(patched.body.values[String(makeField.id)]).toBe("Accord");
-      expect(patched.body.values[String(yearField.id)]).toBe(2020);
+      expect(patched.body.values.make).toBe("Accord");
+      expect(patched.body.values.year).toBe(2020);
 
       const del = await request(app)
         .delete(`/api/entries/${created.body.id}`)
