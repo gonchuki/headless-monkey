@@ -8,6 +8,8 @@ export interface ContentRecord {
   created_by: string;
   last_modified_date: string;
   last_modified_by: string;
+  /** Distinct referencing-entry count (# of entries whose schema-ref points here). */
+  referencer_count: number;
 }
 
 export interface ContentRow {
@@ -109,10 +111,24 @@ export class ContentRepository {
     this.db.prepare("DELETE FROM content WHERE id = ?").run(id);
   }
 
+  /**
+   * Distinct referencing-entry count for a target entry: how many *entries*
+   * (not reference rows) currently point at it via a schema-ref value. If one
+   * entry has two schema-ref fields aimed at the same target, it counts once.
+   */
+  countReferencesTo(targetContentId: number): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(DISTINCT content_id) AS count FROM content_refs WHERE target_content_id = ?"
+      )
+      .get(targetContentId) as { count: number };
+    return row.count;
+  }
+
   getEntry(id: number): ContentEntryRow | null {
     const record = this.db
       .prepare(
-        "SELECT id, schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by FROM content WHERE id = ?"
+        "SELECT id, schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by, (SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count FROM content WHERE id = ?"
       )
       .get(id) as ContentRecord | undefined;
 
@@ -136,7 +152,7 @@ export class ContentRepository {
   listEntries(schema: string): ContentEntryRow[] {
     const records = this.db
       .prepare(
-        "SELECT id, schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by FROM content WHERE schema = ? ORDER BY id"
+        "SELECT id, schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by, (SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count FROM content WHERE schema = ? ORDER BY id"
       )
       .all(schema) as ContentRecord[];
 

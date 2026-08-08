@@ -479,4 +479,141 @@ describe("ContentService", () => {
       expectStatus(() => contentService.delete(9999), 404);
     });
   });
+
+  describe("delete (R34 referencer block)", () => {
+    function makePersonCar(schemaService: SchemaService) {
+      makeSchema(schemaService, "person", [
+        { label: "name", type: "text", required: true },
+      ]);
+      return makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ]);
+    }
+
+    function deleteError(
+      contentService: ContentService,
+      entryId: number
+    ): ContentServiceError | undefined {
+      try {
+        contentService.delete(entryId);
+      } catch (err) {
+        return err as ContentServiceError;
+      }
+      return undefined;
+    }
+
+    it("409 naming the referencer count when two entries reference a target", () => {
+      const { schemaService, contentService } = setup();
+      const car = makePersonCar(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      const person = contentService.create("person", { "1": "Alice" }, "editor1");
+      contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: person.id },
+        "editor1"
+      );
+      contentService.create(
+        "car",
+        { [String(makeField.id)]: "Accord", [String(ownerField.id)]: person.id },
+        "editor1"
+      );
+
+      const err = deleteError(contentService, person.id);
+      expect(err).toBeDefined();
+      expect(err!.statusCode).toBe(409);
+      expect(err!.message).toContain("2");
+      // The blocked attempt leaves the target entry intact.
+      expect(contentService.getEntryMeta(person.id)).toEqual({ id: person.id, schema: "person" });
+    });
+
+    it("409 for an entry referenced from a different schema (cross-schema refs)", () => {
+      const { schemaService, contentService } = setup();
+      const car = makePersonCar(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      const person = contentService.create("person", { "1": "Alice" }, "editor1");
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: person.id },
+        "editor1"
+      );
+      expect(carEntry.schema).toBe("car");
+      expect(person.schema).toBe("person");
+
+      const err = deleteError(contentService, person.id);
+      expect(err).toBeDefined();
+      expect(err!.statusCode).toBe(409);
+    });
+
+    it("deleting an unreferenced entry succeeds", () => {
+      const { schemaService, contentService } = setup();
+      makePersonCar(schemaService);
+
+      const person = contentService.create("person", { "1": "Alice" }, "editor1");
+      expect(deleteError(contentService, person.id)).toBeUndefined();
+      expect(contentService.getEntryMeta(person.id)).toBeNull();
+    });
+
+    it("counts one entry with two schema-ref fields to the same target as one referencer (distinct entries)", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "person", [
+        { label: "name", type: "text", required: true },
+      ]);
+      const car = makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "co_owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ]);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const coOwnerField = car.fields.find((f) => f.label === "co_owner")!;
+
+      const person = contentService.create("person", { "1": "Alice" }, "editor1");
+      contentService.create(
+        "car",
+        {
+          [String(makeField.id)]: "Civic",
+          [String(ownerField.id)]: person.id,
+          [String(coOwnerField.id)]: person.id,
+        },
+        "editor1"
+      );
+
+      const err = deleteError(contentService, person.id);
+      expect(err).toBeDefined();
+      expect(err!.statusCode).toBe(409);
+      expect(err!.message).toContain("1");
+      expect(err!.message).not.toContain("2");
+    });
+
+    it("exposes referencer_count on the editor list shape (distinct referencing entries)", () => {
+      const { schemaService, contentService } = setup();
+      const car = makePersonCar(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      const car1 = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic" },
+        "editor1"
+      );
+      const person = contentService.create("person", { "1": "Alice" }, "editor1");
+      const car2 = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Accord", [String(ownerField.id)]: person.id },
+        "editor1"
+      );
+
+      const byId = new Map(
+        contentService.listForSchema("car").map((e) => [e.id, e.referencer_count])
+      );
+      expect(byId.get(car1.id)).toBe(0);
+      expect(byId.get(car2.id)).toBe(0);
+      expect(contentService.listForSchema("person")[0].referencer_count).toBe(1);
+    });
+  });
 });

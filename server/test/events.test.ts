@@ -216,6 +216,83 @@ describe("GET /api/events", () => {
       req.destroy();
     });
   });
+
+  it("does not broadcast entry.deleted for a blocked delete (R34)", async () => {
+    const { app } = setup();
+    const token = editorToken("alice");
+
+    await withServer(app, async (port) => {
+      const events: RealtimeEvent[] = [];
+      const req = await openStream(port, token, events);
+      await new Promise<void>((resolve, reject) => {
+        req.on("response", () => resolve());
+        req.on("error", reject);
+      });
+
+      // person: single name field (id 1). car: make (id 2) + owner → person (id 3)
+      const personSchemaRes = await request(app)
+        .post("/api/schemas")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ name: "person", fields: [{ label: "name", type: "text", required: true }] });
+      expect(personSchemaRes.status).toBe(201);
+
+      const carSchemaRes = await request(app)
+        .post("/api/schemas")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          name: "car",
+          fields: [
+            { label: "make", type: "text", required: true },
+            { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+          ],
+        });
+      expect(carSchemaRes.status).toBe(201);
+
+      const personRes = await request(app)
+        .post("/api/schemas/person/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { "1": "Alice" } });
+      expect(personRes.status).toBe(201);
+      const personId = personRes.body.id as number;
+
+      await waitForEvent(events, (e) => e.type === "entry.created" && e.entryId === personId);
+
+      const carRes = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { "2": "Civic", "3": personId } });
+      expect(carRes.status).toBe(201);
+      const carId = carRes.body.id as number;
+
+      // Blocked delete: the service throws 409 before the route reaches the emit.
+      const blocked = await request(app)
+        .delete(`/api/entries/${personId}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(blocked.status).toBe(409);
+
+      // Negative assertion: no entry.deleted for the referenced entry within a bounded wait.
+      const deadline = Date.now() + 300;
+      while (Date.now() < deadline) {
+        if (events.some((e) => e.type === "entry.deleted" && e.entryId === personId)) {
+          throw new Error("blocked delete must not emit entry.deleted");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      // Positive control: an unreferenced delete does emit the event, proving
+      // the subscription works so the negative assertion is meaningful.
+      const del = await request(app)
+        .delete(`/api/entries/${carId}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(del.status).toBe(204);
+      await waitForEvent(
+        events,
+        (e) => e.type === "entry.deleted" && e.entryId === carId
+      );
+
+      req.destroy();
+    });
+  });
 });
 
 describe("EventsEmitter", () => {

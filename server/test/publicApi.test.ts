@@ -321,4 +321,55 @@ describe("Public content API (R18-R20)", () => {
       expect(res.status).toBe(422);
     });
   });
+
+  describe("editor delete blocks referenced entries (R34)", () => {
+    it("returns 409 naming the referencer count for a referenced entry; 204 for an unreferenced one", async () => {
+      const { app, schemaService } = createTestApp();
+      const personSchema = schemaService.create(
+        "person",
+        [{ label: "name", type: "text", required: true }],
+        "editor1"
+      );
+      const car = schemaService.create(
+        "car",
+        [
+          { label: "make", type: "text", required: true },
+          { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        ],
+        "editor1"
+      );
+      const nameField = personSchema.fields.find((f) => f.label === "name")!;
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const token = editorToken();
+
+      const personRes = await request(app)
+        .post("/api/schemas/person/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(nameField.id)]: "Alice" } });
+      expect(personRes.status).toBe(201);
+
+      const carRes = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          values: {
+            [String(makeField.id)]: "Civic",
+            [String(ownerField.id)]: personRes.body.id,
+          },
+        });
+      expect(carRes.status).toBe(201);
+
+      const blocked = await request(app)
+        .delete(`/api/entries/${personRes.body.id}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(blocked.status).toBe(409);
+      expect(blocked.body.error).toContain("1");
+
+      const ok = await request(app)
+        .delete(`/api/entries/${carRes.body.id}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(ok.status).toBe(204);
+    });
+  });
 });
