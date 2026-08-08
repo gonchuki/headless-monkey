@@ -22,6 +22,7 @@ import type { ContentListEntry } from "@/lib/api";
 import { entryLabel, schemaLabelField } from "@/lib/entries";
 import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
+import { SchemaBadge } from "@/components/shared/SchemaBadge";
 
 const ALL_SCHEMAS_VALUE = "all";
 
@@ -162,11 +163,7 @@ export default function ContentPage() {
               <SelectItem value={ALL_SCHEMAS_VALUE}>All schemas</SelectItem>
               {schemas.map((schema) => (
                 <SelectItem key={schema.name} value={schema.name}>
-                  <span
-                    className="inline-block size-4 shrink-0 rounded-full"
-                    style={{ backgroundColor: schemaColor(schema.name).background }}
-                    aria-hidden="true"
-                  />
+                  <SchemaBadge bgcolor={schemaColor(schema.name).background} className="self-center" />
                   {schema.name}
                 </SelectItem>
               ))}
@@ -223,15 +220,12 @@ export default function ContentPage() {
                   </p>
                 </div>
                 {allView && (
-                  <span
-                    className="flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium"
-                    style={{
-                      backgroundColor: schemaColor(entry.schema).background,
-                      color: schemaColor(entry.schema).foreground,
-                    }}
+                  <SchemaBadge
+                    bgcolor={schemaColor(entry.schema).background}
+                    textcolor={schemaColor(entry.schema).foreground}
                   >
                     {entry.schema}
-                  </span>
+                  </SchemaBadge>
                 )}
                 {entry.conflict && (
                   <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600">

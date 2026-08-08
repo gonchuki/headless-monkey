@@ -11,6 +11,7 @@ import { useSchemaEntryCount, useSchemas } from "@/hooks/useSchemas";
 import { type SchemaEntry } from "@/lib/api";
 import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
+import { SchemaBadge } from "@/components/shared/SchemaBadge";
 
 function errorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
@@ -92,11 +93,7 @@ export default function SchemasPage() {
                   deleted && "pointer-events-none opacity-50",
                 )}
               >
-                <span
-                  className="inline-block size-4 shrink-0 rounded-full"
-                  style={{ backgroundColor: schemaColor(schema.name).background }}
-                  aria-hidden="true"
-                />
+                <SchemaBadge bgcolor={schemaColor(schema.name).background} />
                 <div className="min-w-0 flex-1 text-left">
                   <p className="truncate text-sm font-medium">
                     {schema.name}

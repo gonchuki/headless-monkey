@@ -14,6 +14,7 @@ import { schemaColor } from "@/lib/schemaColors";
 import { FIELD_TYPE_LABELS, FIELD_TYPES, type FieldType } from "@/lib/api";
 import { FIELD_GRID_TEMPLATE } from "@/lib/schemaGrid";
 import type { SchemaDraft } from "@/hooks/useSchemas";
+import { SchemaBadge } from "./shared/SchemaBadge";
 
 export interface SchemaFieldRowProps {
   field: SchemaDraft;
@@ -110,16 +111,23 @@ export function SchemaFieldRow({
             onValueChange={(value) => onChange(index, { ref_schema: typeof value === "string" ? value : undefined })}
           >
             <SelectTrigger id={`field-${index}-ref`}>
-              <SelectValue placeholder="Select a schema" />
+              <SelectValue>
+                {(value) => {
+                  if (!value) return "Select a schema"
+
+                  return (
+                    <>
+                      <SchemaBadge bgcolor={schemaColor(value).background} />
+                      {value}
+                    </>
+                  )
+                }}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {refSchemas.map((schema) => (
                 <SelectItem key={schema} value={schema}>
-                  <span
-                    className="inline-block size-4 shrink-0 rounded-full"
-                    style={{ backgroundColor: schemaColor(schema).background }}
-                    aria-hidden="true"
-                  />
+                  <SchemaBadge bgcolor={schemaColor(schema).background} className="self-center"  />
                   {schema}
                 </SelectItem>
               ))}

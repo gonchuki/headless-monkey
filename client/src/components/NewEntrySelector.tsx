@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import { schemaColor } from "@/lib/schemaColors";
 import { useSchemas } from "@/hooks/useSchemas";
+import { SchemaBadge } from "./shared/SchemaBadge";
 
 export interface NewEntrySelectorProps {
   value?: string;
@@ -37,16 +38,23 @@ export function NewEntrySelector({ value, onChange }: NewEntrySelectorProps) {
         }}
       >
         <SelectTrigger id="new-entry-schema" disabled={empty}>
-          <SelectValue placeholder={empty ? "No schemas yet" : "Select a schema"} />
+          <SelectValue>
+            {(value) => {
+              if (!value) return empty ? "No schemas yet" : "Select a schema"
+
+              return (
+                <>
+                  <SchemaBadge bgcolor={schemaColor(value).background} />
+                  {value}
+                </>
+              )
+            }}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {schemas.map((schema) => (
             <SelectItem key={schema.name} value={schema.name}>
-              <span
-                className="inline-block size-4 shrink-0 rounded-full"
-                style={{ backgroundColor: schemaColor(schema.name).background }}
-                aria-hidden="true"
-              />
+              <SchemaBadge bgcolor={schemaColor(schema.name).background} className="self-center" />
               {schema.name}
             </SelectItem>
           ))}
