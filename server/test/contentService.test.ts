@@ -304,6 +304,157 @@ describe("ContentService", () => {
     });
   });
 
+  describe("schema-ref storage in content_refs (PLAN-26)", () => {
+    function makePersonCar(schemaService: SchemaService) {
+      makeSchema(schemaService, "person", [
+        { label: "name", type: "text", required: true },
+      ]);
+      return makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ]);
+    }
+
+    it("stores a schema-ref target as an integer row in content_refs and not as a JSON number in content_rows", () => {
+      const { db, schemaService, contentService } = setup();
+      const car = makePersonCar(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      const personEntry = contentService.create("person", { "1": "Alice" }, "editor1");
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      const refRows = db
+        .prepare(
+          "SELECT field_id, target_content_id FROM content_refs WHERE content_id = ?"
+        )
+        .all(carEntry.id) as { field_id: number; target_content_id: number }[];
+      expect(refRows).toEqual([
+        { field_id: ownerField.id, target_content_id: personEntry.id },
+      ]);
+
+      // No dual storage: the schema-ref field id must not appear in content_rows.
+      const ownerScalarRow = db
+        .prepare(
+          "SELECT value FROM content_rows WHERE content_id = ? AND field_id = ?"
+        )
+        .get(carEntry.id, ownerField.id);
+      expect(ownerScalarRow).toBeUndefined();
+
+      // The scalar field is still stored as a JSON string in content_rows.
+      const makeValue = (
+        db
+          .prepare(
+            "SELECT value FROM content_rows WHERE content_id = ? AND field_id = ?"
+          )
+          .get(carEntry.id, makeField.id) as { value: string }
+      ).value;
+      expect(JSON.parse(makeValue)).toBe("Civic");
+    });
+
+    it("round-trips a schema-ref: editor reads the raw target id, public reads {id, schema}", () => {
+      const { schemaService, contentService } = setup();
+      const car = makePersonCar(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      const personEntry = contentService.create("person", { "1": "Alice" }, "editor1");
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      // Editor shape: values keyed by String(field_id) with the raw target number.
+      expect(contentService.listForSchema("car")[0].values).toEqual({
+        [String(makeField.id)]: "Civic",
+        [String(ownerField.id)]: personEntry.id,
+      });
+
+      // Public shape: values keyed by label, schema-ref enriched to {id, schema}.
+      const expectedPublic = {
+        make: "Civic",
+        owner: { id: personEntry.id, schema: "person" },
+      };
+      expect(contentService.listPublic("car")[0].values).toEqual(expectedPublic);
+      expect(contentService.getPublic("car", carEntry.id).values).toEqual(expectedPublic);
+    });
+
+    it("retargets a schema-ref on update: exactly one ref row pointing at the new target, no scalar row", () => {
+      const { db, schemaService, contentService } = setup();
+      const car = makePersonCar(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      const personA = contentService.create("person", { "1": "Alice" }, "editor1");
+      const personB = contentService.create("person", { "1": "Bob" }, "editor1");
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personA.id },
+        "editor1"
+      );
+
+      contentService.update(
+        carEntry.id,
+        { [String(ownerField.id)]: personB.id },
+        "editor1"
+      );
+
+      const refRows = db
+        .prepare(
+          "SELECT field_id, target_content_id FROM content_refs WHERE content_id = ?"
+        )
+        .all(carEntry.id) as { field_id: number; target_content_id: number }[];
+      expect(refRows).toEqual([
+        { field_id: ownerField.id, target_content_id: personB.id },
+      ]);
+
+      const ownerScalarRow = db
+        .prepare(
+          "SELECT value FROM content_rows WHERE content_id = ? AND field_id = ?"
+        )
+        .get(carEntry.id, ownerField.id);
+      expect(ownerScalarRow).toBeUndefined();
+
+      expect(contentService.listForSchema("car")[0].values).toEqual({
+        [String(makeField.id)]: "Civic",
+        [String(ownerField.id)]: personB.id,
+      });
+    });
+
+    it("clearing an optional schema-ref to null leaves zero content_refs rows for that field", () => {
+      const { db, schemaService, contentService } = setup();
+      const car = makePersonCar(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      const personEntry = contentService.create("person", { "1": "Alice" }, "editor1");
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      contentService.update(carEntry.id, { [String(ownerField.id)]: null }, "editor1");
+
+      const refRows = db
+        .prepare(
+          "SELECT field_id, target_content_id FROM content_refs WHERE content_id = ? AND field_id = ?"
+        )
+        .all(carEntry.id, ownerField.id);
+      expect(refRows).toEqual([]);
+
+      // Serialization mirrors the absent-value behavior: the key is omitted.
+      expect(contentService.getPublic("car", carEntry.id).values).toEqual({
+        make: "Civic",
+      });
+    });
+  });
+
   describe("delete (R22 cascade)", () => {
     it("removes the entry and its content_rows", () => {
       const { db, schemaService, contentService } = setup();
