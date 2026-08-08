@@ -33,7 +33,7 @@ function expectStatus(fn: () => unknown, status: number): void {
 
 describe("ContentService", () => {
   describe("serialization (§7 example)", () => {
-    it("exposes the full §4 shape and §7 values keyed by field label with schema-ref enrichment (ids 12-16)", () => {
+    it("create()/listForSchema() expose the editor field_id-keyed shape; public API exposes the §7 label-keyed enriched shape (ids 12-16)", () => {
       const { schemaService, contentService } = setup();
 
       makeSchema(schemaService, "person", [
@@ -71,12 +71,14 @@ describe("ContentService", () => {
         "editor1"
       );
 
+      // Editor routes serialize values keyed by String(field_id), with schema-ref
+      // values as the raw target content-id number (no {id, schema} enrichment).
       expect(entry.values).toEqual({
-        make: "Civic",
-        year: 2019,
-        active: true,
-        built: "2021-05-04",
-        owner: { id: personEntry.id, schema: "person" },
+        "12": "Civic",
+        "13": 2019,
+        "14": true,
+        "15": "2021-05-04",
+        "16": personEntry.id,
       });
       expect(Object.keys(entry).sort()).toEqual([
         "created_by",
@@ -91,8 +93,17 @@ describe("ContentService", () => {
       expect(entry.schema).toBe("car");
       expect(entry.schema_version).toBe(1);
 
-      // Public endpoints serialize the same label-keyed, enriched shape
-      expect(contentService.listPublic("car")[0].values).toEqual(entry.values);
+      // The editor list serializes the same field_id-keyed shape
+      expect(contentService.listForSchema("car")[0].values).toEqual(entry.values);
+
+      // The public API serializes the §7 label-keyed, enriched shape
+      expect(contentService.listPublic("car")[0].values).toEqual({
+        make: "Civic",
+        year: 2019,
+        active: true,
+        built: "2021-05-04",
+        owner: { id: personEntry.id, schema: "person" },
+      });
       expect(contentService.getPublic("car", entry.id).values.owner).toEqual({
         id: personEntry.id,
         schema: "person",
@@ -207,7 +218,7 @@ describe("ContentService", () => {
       );
 
       const updated = contentService.update(entry.id, {}, "editor1");
-      expect(updated.values.year).toBe("2019");
+      expect(updated.values["1"]).toBe("2019");
       expect(updated.schema_version).toBe(2);
     });
 
@@ -228,7 +239,7 @@ describe("ContentService", () => {
       expectStatus(() => contentService.update(entry.id, {}, "editor1"), 422);
 
       const fixed = contentService.update(entry.id, { "1": 2019 }, "editor1");
-      expect(fixed.values.year).toBe(2019);
+      expect(fixed.values["1"]).toBe(2019);
       expect(fixed.schema_version).toBe(2);
     });
   });

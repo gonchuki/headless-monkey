@@ -25,6 +25,14 @@ export interface ContentListEntry extends ContentEntry {
   conflict: boolean;
 }
 
+/**
+ * Editor shape: `values` keyed by `String(field_id)` with schema-ref values as raw
+ * target content-id numbers (what the client consumes via the editor routes).
+ * Public shape: `values` keyed by field label with schema-ref values enriched to
+ * `{id, schema}` (self-describing read API).
+ */
+export type EntryShape = "editor" | "public";
+
 export class ContentServiceError extends Error {
   constructor(
     public statusCode: number,
@@ -60,7 +68,7 @@ export class ContentService {
     const schema = this.requireSchema(schemaName);
     const rows = this.buildRows(schema, null, values);
     const id = this.repo.insert(schema.name, schema.version, createdBy, rows);
-    return this.toEntry(this.requireEntry(id), schema);
+    return this.toEntry(this.requireEntry(id), schema, false, "editor");
   }
 
   update(
@@ -75,7 +83,7 @@ export class ContentService {
     const schema = this.requireSchema(existing.record.schema);
     const rows = this.buildRows(schema, existing, values);
     this.repo.replaceRows(entryId, schema.version, modifiedBy, rows);
-    return this.toEntry(this.requireEntry(entryId), schema);
+    return this.toEntry(this.requireEntry(entryId), schema, false, "editor");
   }
 
   delete(entryId: number): void {
@@ -94,7 +102,9 @@ export class ContentService {
 
   listForSchema(schemaName: string): ContentListEntry[] {
     const schema = this.requireSchema(schemaName);
-    return this.repo.listEntries(schemaName).map((entry) => this.toEntry(entry, schema, true));
+    return this.repo
+      .listEntries(schemaName)
+      .map((entry) => this.toEntry(entry, schema, true, "editor"));
   }
 
   listPublic(schemaName: string): ContentEntry[] {
@@ -251,17 +261,20 @@ export class ContentService {
   private toEntry(
     entry: ContentEntryRow,
     schema: SchemaEntry,
-    includeConflict: true
+    includeConflict: true,
+    shape?: EntryShape
   ): ContentListEntry;
   private toEntry(
     entry: ContentEntryRow,
     schema: SchemaEntry,
-    includeConflict?: false
+    includeConflict?: false,
+    shape?: EntryShape
   ): ContentEntry;
   private toEntry(
     entry: ContentEntryRow,
     schema: SchemaEntry,
-    includeConflict = false
+    includeConflict = false,
+    shape: EntryShape = "public"
   ): ContentEntry | ContentListEntry {
     const fieldsById = new Map(schema.fields.map((f) => [f.id, f]));
     const values: Record<string, ContentValue> = {};
@@ -269,6 +282,10 @@ export class ContentService {
       const field = fieldsById.get(row.field_id);
       if (!field) continue;
       const parsed = JSON.parse(row.value ?? "null") as ContentValue;
+      if (shape === "editor") {
+        values[String(field.id)] = parsed;
+        continue;
+      }
       values[field.label] =
         field.type === "schema-ref" && typeof parsed === "number" && field.ref_schema
           ? { id: parsed, schema: field.ref_schema }

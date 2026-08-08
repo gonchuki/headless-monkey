@@ -146,7 +146,7 @@ describe("Public content API (R18-R20)", () => {
       expect(res.body).not.toHaveProperty("conflict");
     });
 
-    it("enriches schema-ref values as {id, schema} keyed by field label", async () => {
+    it("enriches schema-ref values as {id, schema} keyed by field label on the public route", async () => {
       const { app, schemaService } = createTestApp();
       schemaService.create(
         "person",
@@ -181,10 +181,9 @@ describe("Public content API (R18-R20)", () => {
           },
         });
       expect(created.status).toBe(201);
-      expect(created.body.values.owner).toEqual({
-        id: person.body.id,
-        schema: "person",
-      });
+      // Editor POST responses keep field_id keys with the raw target id number
+      expect(created.body.values[String(ownerField.id)]).toBe(person.body.id);
+      expect(created.body.values[String(makeField.id)]).toBe("Civic");
 
       const res = await request(app).get(`/api/content/car/${created.body.id}`);
       expect(res.status).toBe(200);
@@ -274,9 +273,10 @@ describe("Public content API (R18-R20)", () => {
         .send({ values: { [String(makeField.id)]: "Civic", [String(yearField.id)]: 2019 } });
       expect(created.status).toBe(201);
       expect(created.body.schema).toBe("car");
+      // Editor routes serialize values keyed by String(field_id)
       expect(created.body.values).toEqual({
-        make: "Civic",
-        year: 2019,
+        [String(makeField.id)]: "Civic",
+        [String(yearField.id)]: 2019,
       });
 
       const list = await request(app)
@@ -285,14 +285,18 @@ describe("Public content API (R18-R20)", () => {
       expect(list.status).toBe(200);
       expect(list.body.length).toBe(1);
       expect(list.body[0].conflict).toBe(false);
+      expect(list.body[0].values).toEqual({
+        [String(makeField.id)]: "Civic",
+        [String(yearField.id)]: 2019,
+      });
 
       const patched = await request(app)
         .patch(`/api/entries/${created.body.id}`)
         .set("Authorization", `Bearer ${token}`)
         .send({ values: { [String(makeField.id)]: "Accord", [String(yearField.id)]: 2020 } });
       expect(patched.status).toBe(200);
-      expect(patched.body.values.make).toBe("Accord");
-      expect(patched.body.values.year).toBe(2020);
+      expect(patched.body.values[String(makeField.id)]).toBe("Accord");
+      expect(patched.body.values[String(yearField.id)]).toBe(2020);
 
       const del = await request(app)
         .delete(`/api/entries/${created.body.id}`)

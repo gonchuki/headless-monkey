@@ -1,6 +1,6 @@
 # SPEC: headless-monkey CMS (v0.6 — 2026-08-08)
 
-v0.6 — BREAKING: content API `values` responses are keyed by field label (not numeric `field_id`) and schema-ref values serialize as `{id, schema}` instead of the raw target id (§2 R15, §4, §7)
+v0.6 — BREAKING: the public content API `values` responses are keyed by field label (not numeric `field_id`) and schema-ref values serialize as `{id, schema}` instead of the raw target id; the editor content routes keep `field_id`-keyed `values` with raw schema-ref numbers (§2 R15, §4, §7)
 v0.5 — schema fields must have non-empty labels and every schema needs at least one required field (§2 R8, R30)
 v0.4 — corrected UI component mapping: user confirmations use `<AlertDialog />`; `<Alert />` is the passive banner; `<Toast />` is the notification toast (§2 R22, R24, R26; §5)
 v0.3 — resolved build-plan decisions: required text must be non-empty; lossless value coercion on type change; referenced-schema delete blocked (409); SSE via fetch reader (§2 R16–R17, §5, §6)
@@ -29,7 +29,7 @@ Schema model & versioning
 - R12. Every schema update increments `version` by exactly 1.
 - R13. Non-breaking changes keep `compat_version` unchanged: adding an *optional* field; changing `number→text`; changing `required→optional`; renaming a field label; reordering fields.
 - R14. Every other change sets `compat_version = version`: adding a *required* field; deleting a field; `text→number`; `optional→required`; any change into/out of `boolean`, `date`, or `schema-ref`; changing a `schema-ref`'s `ref_schema`.
-- R15. Fields are referenced by stable numeric `field_id` in content rows, write payloads, and SSE events, never by label; renaming a label changes no stored data and does not invalidate content. Content API `values` responses are keyed by the field's unique label (R8 guarantees labels are unique per schema) so consumers get self-describing responses: `field_id` is the write-side reference, label is the read-side key.
+- R15. Fields are referenced by stable numeric `field_id` in content rows, write payloads, editor `values` responses, and SSE events, never by label; renaming a label changes no stored data and does not invalidate content. Public content API `values` responses are keyed by the field's unique label (R8 guarantees labels are unique per schema) so consumers get self-describing responses: `field_id` is the write-side and editor read-side key, label is the public read-side key.
 
 Content & public API
 - R16. Creating an entry requires every required field to have a value valid for its type; a required `text` field must be non-empty. Violation returns 422. Unknown `field_id` returns 422. A `schema-ref` value must reference an existing entry id of the target schema; violation returns 422.
@@ -97,7 +97,7 @@ Auth & control panel (Bearer auth unless noted):
 - `POST /api/auth/login` `{login,password}` → `{token}` (no auth). `POST /api/auth/logout` → 204. `GET /api/auth/me` → `{login, role}`.
 - Users (admin only): `GET /api/users`; `POST /api/users` `{login,password}`; `PATCH /api/users/:id` `{password?, disabled?}`; `DELETE /api/users/:id`.
 - Schemas (editor): `GET /api/schemas`; `POST /api/schemas` `{name, fields:[{label,type,required,ref_schema?}]}`; `GET /api/schemas/:name`; `PATCH /api/schemas/:name` (same `fields` shape; existing fields carry their `id`, new fields omit it, absent ids are deleted); `DELETE /api/schemas/:name`.
-- Content (editor): `GET /api/schemas/:name/entries` (all entries incl. conflicted, each with `conflict: boolean`; entries carry the same label-keyed `values` shape as the public API); `POST /api/schemas/:name/entries`; `PATCH /api/entries/:id`; `DELETE /api/entries/:id`.
+- Content (editor): `GET /api/schemas/:name/entries` (all entries incl. conflicted, each with `conflict: boolean`; `values` keyed by `String(field_id)` with schema-ref values as raw target content-id numbers — the editor shape, explicitly distinct from the public API's label-keyed shape); `POST /api/schemas/:name/entries`; `PATCH /api/entries/:id`; `DELETE /api/entries/:id`. Editor `POST`/`PATCH` responses carry the same field_id-keyed `values` shape.
 - SSE: `GET /api/events` (Bearer). Event JSON: `{ type, schema, entryId?, version?, compatVersion?, by, changes? }`; `changes: [{ kind: 'renamed'|'added'|'deleted'|'typeChanged'|'requiredChanged'|'reordered', fieldId?, label?, type?, required? }]`.
 
 Value serialization: in `content_rows.value` (DB storage, JSON-encoded TEXT): text→string; number→number; boolean→boolean; date→`"YYYY-MM-DD"`; schema-ref→target content id (number). API `values` responses use the same per-type encoding except schema-ref values, which are enriched to `{id: <target_entry_id>, schema: <ref_schema_name>}` (see the public API contract above).
