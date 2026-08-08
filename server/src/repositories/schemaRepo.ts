@@ -134,13 +134,9 @@ export class SchemaRepository {
     const now = new Date().toISOString();
 
     if (deletedFieldIds.length > 0) {
-      const placeholders = deletedFieldIds.map(() => "?").join(",");
-      this.db
-        .prepare(
-          "DELETE FROM content_rows WHERE field_id IN (" + placeholders + ") AND content_id IN (SELECT id FROM content WHERE schema = ?)"
-        )
-        .run(...deletedFieldIds, schemaName);
-
+      // R21: field deletion bumps every surviving entry's schema_version. The
+      // content_rows removal for deleted fields is handled by the DDL's
+      // `schema_fields.id` ON DELETE CASCADE (no manual prune needed).
       this.db
         .prepare("UPDATE content SET schema_version = ? WHERE schema = ?")
         .run(version, schemaName);
@@ -199,18 +195,9 @@ export class SchemaRepository {
   }
 
   deleteSchema(schemaName: string): void {
-    const tx = this.db.transaction(() => {
-      this.db
-        .prepare(
-          "DELETE FROM content_rows WHERE content_id IN (SELECT id FROM content WHERE schema = ?)"
-        )
-        .run(schemaName);
-      this.db.prepare("DELETE FROM content WHERE schema = ?").run(schemaName);
-      this.db.prepare("DELETE FROM schema_fields WHERE schema = ?").run(schemaName);
-      this.db.prepare("DELETE FROM schemas WHERE name = ?").run(schemaName);
-    });
-
-    tx();
+    // Single DELETE: the DDL cascade chain removes the schema's fields,
+    // content, and their content_rows/content_refs.
+    this.db.prepare("DELETE FROM schemas WHERE name = ?").run(schemaName);
   }
 
   getSchemasReferencing(schemaName: string): string[] {
