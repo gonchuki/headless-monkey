@@ -53,7 +53,12 @@ export function ReferenceSelect({
       onValueChange={(selected) => onChange(typeof selected === "string" ? Number(selected) : null)}
     >
       <SelectTrigger disabled={disabled || entries.length === 0} aria-invalid={invalid}>
-        <SelectValue placeholder={entries.length === 0 ? "No entries to reference" : "Select an entry"} />
+        <SelectValue placeholder={entries.length === 0 ? "No entries to reference" : "Select an entry"}>
+          {(selectedValue) => {
+            const selectedEntry = entries.find((entry) => String(entry.id) === selectedValue);
+            return selectedEntry ? entryLabel(selectedEntry, labelFieldId) : null;
+          }}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {entries.map((entry) => (
