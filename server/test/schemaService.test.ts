@@ -196,6 +196,22 @@ describe("SchemaService", () => {
       ).toThrow(SchemaServiceError);
     });
 
+    it("rejects duplicate field labels on update (R8)", () => {
+      const service = createService();
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      // Rename color → make: labels collide after the rename
+      expect(() =>
+        service.update("car", [
+          { id: 1, label: "make", type: "text", required: true },
+          { id: 2, label: "make", type: "text", required: false },
+        ], "editor1")
+      ).toThrow(SchemaServiceError);
+    });
+
     it("increments version on every update (R12)", () => {
       const service = createService();
       service.create("car", [

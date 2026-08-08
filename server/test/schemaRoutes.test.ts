@@ -281,6 +281,26 @@ describe("Schema Routes", () => {
       expect(res.body.fields[0].label).toBe("manufacturer");
     });
 
+    it("rejects duplicate field labels on PATCH (R8) → 422", async () => {
+      const { app, schemaService } = createTestApp();
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const res = await request(app)
+        .patch("/api/schemas/car")
+        .send({
+          fields: [
+            { id: 1, label: "make", type: "text", required: true },
+            { id: 2, label: "make", type: "text", required: false },
+          ],
+        });
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("Duplicate field label");
+    });
+
     it("deleting a field bumps compat_version (§7)", async () => {
       const { app, schemaService } = createTestApp();
       schemaService.create("car", [

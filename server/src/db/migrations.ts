@@ -49,6 +49,13 @@ const MIGRATIONS: { name: string; sql: string }[] = [
       );
     `,
   },
+  {
+    name: "002_unique_schema_field_labels",
+    sql: `
+      CREATE UNIQUE INDEX idx_schema_fields_schema_label
+        ON schema_fields(schema, label);
+    `,
+  },
 ];
 
 export function applyMigrations(db: Db): void {

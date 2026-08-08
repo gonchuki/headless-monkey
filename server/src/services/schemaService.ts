@@ -140,6 +140,18 @@ export class SchemaService {
       );
     }
 
+    // R8: duplicate labels → 422
+    const labels = new Set<string>();
+    for (const f of fields) {
+      if (labels.has(f.label)) {
+        throw new SchemaServiceError(
+          422,
+          `Duplicate field label: ${f.label}`
+        );
+      }
+      labels.add(f.label);
+    }
+
     // Validate field types and ref_schema
     for (const f of fields) {
       if (!VALID_TYPES.has(f.type as FieldType)) {

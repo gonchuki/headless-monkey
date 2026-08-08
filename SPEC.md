@@ -21,7 +21,7 @@ Auth & users
 - R7. `PATCH /api/users/:id` can change `password` and/or flip `disabled`. `DELETE /api/users/:id` removes the editor. (No admin row exists to be modified/deleted.)
 
 Schema model & versioning
-- R8. `POST /api/schemas` with zero fields, with an empty/whitespace-only field label, with no required fields, or with duplicate field labels returns 422; with a `name` that already exists returns 409. `PATCH /api/schemas/:name` returns 422 with zero fields, with an empty/whitespace-only field label, or with no required fields.
+- R8. `POST /api/schemas` with zero fields, with an empty/whitespace-only field label, with no required fields, or with duplicate field labels returns 422; with a `name` that already exists returns 409. `PATCH /api/schemas/:name` returns 422 with zero fields, with an empty/whitespace-only field label, with no required fields, or with duplicate field labels.
 - R9. Field `type` is limited to `text|number|boolean|date|schema-ref`; anything else returns 422. A `schema-ref` field requires a valid existing `ref_schema` name.
 - R10. Circular `schema-ref` references (direct or transitive) return 422 on create/update of the schema that would close the cycle.
 - R11. On schema create, `version=1` and `compat_version=1`; `creation_date`/`last_modified_date`/`created_by`/`last_modified_by` are set.
