@@ -61,12 +61,17 @@ function isSchemaRef(value: unknown): value is { id: number; schema: string } {
  *    this second pass, a test that only iterates the schema-ref values present
  *    in the response stays green if a regression un-conflicts an entry whose
  *    required ref key was purged away.
+ *
+ * v0.7 shape: entry `values` are keyed by `String(field_id)`; the walker must
+ * resolve those keys to fields (the guard must fail on a missing required key).
  */
 function assertNoDanglingRefs(db: Db, schema: SchemaEntry, entry: PublicEntryBody): void {
   const where = `entry ${entry.id} (schema ${schema.name})`;
 
-  for (const [label, value] of Object.entries(entry.values)) {
+  const fieldsById = new Map(schema.fields.map((f) => [String(f.id), f]));
+  for (const [fieldIdKey, value] of Object.entries(entry.values)) {
     if (!isSchemaRef(value)) continue;
+    const label = fieldsById.get(fieldIdKey)?.label ?? fieldIdKey;
     const target = db
       .prepare("SELECT schema FROM content WHERE id = ?")
       .get(value.id) as { schema: string } | undefined;
@@ -76,7 +81,7 @@ function assertNoDanglingRefs(db: Db, schema: SchemaEntry, entry: PublicEntryBod
     ).toBeDefined();
     expect(
       target!.schema,
-      `${where}: schema-ref '${label}' emits schema '${value.schema}' but content id ${value.id} belongs to schema '${target!.schema}'`
+      `${where}: schema-ref '${label}' (field ${fieldIdKey}) emits schema '${value.schema}' but content id ${value.id} belongs to schema '${target!.schema}'`
     ).toBe(value.schema);
   }
 
@@ -84,14 +89,15 @@ function assertNoDanglingRefs(db: Db, schema: SchemaEntry, entry: PublicEntryBod
     if (field.type !== "schema-ref" || !field.required) continue;
     expect(
       entry.values,
-      `${where}: required schema-ref '${field.label}' key absent on a served entry`
-    ).toHaveProperty(field.label);
+      `${where}: required schema-ref '${field.label}' (field_id ${field.id}) key absent on a served entry`
+    ).toHaveProperty(String(field.id));
   }
 }
 
 /**
- * Runs the invariant against BOTH public shapes: the (R18) list array and every
- * (R19) `:id` single-entry lookup. Returns the list body for the caller.
+ * Runs the invariant against both public reads: the (R18) list endpoint and
+ * every (R19) `:id` single-entry lookup, on the v0.7 {meta, entries} wrapper.
+ * Returns the entries array for the caller.
  */
 async function expectPublicReadClean(
   app: express.Express,
@@ -104,15 +110,21 @@ async function expectPublicReadClean(
 
   const res = await request(app).get(`/api/content/${schemaName}`);
   expect(res.status).toBe(200);
-  const entries = res.body as PublicEntryBody[];
-  for (const entry of entries) {
+  const body = res.body as { meta: { name: string }; entries: PublicEntryBody[] };
+  expect(body.meta).toBeDefined();
+  expect(body.meta.name).toBe(schemaName);
+  expect(Array.isArray(body.entries)).toBe(true);
+  for (const entry of body.entries) {
     assertNoDanglingRefs(db, schema!, entry);
 
     const single = await request(app).get(`/api/content/${schemaName}/${entry.id}`);
     expect(single.status).toBe(200);
-    assertNoDanglingRefs(db, schema!, single.body as PublicEntryBody);
+    const singleBody = single.body as { meta: { name: string }; entries: PublicEntryBody[] };
+    expect(singleBody.meta.name).toBe(schemaName);
+    expect(singleBody.entries).toHaveLength(1);
+    assertNoDanglingRefs(db, schema!, singleBody.entries[0]);
   }
-  return entries;
+  return body.entries;
 }
 
 /** person + car (owner → person, optional) fixture used by the R34/R35 scenarios. */
@@ -220,14 +232,49 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       expect(served.map((e) => e.id)).toEqual([civic.body.id, accord.body.id]);
 
       for (const entry of served) {
-        expect(entry.values.owner).toEqual(
+        expect(entry.values[String(ownerField.id)]).toEqual(
           entry.id === civic.body.id
             ? { id: alice.body.id, schema: "person" }
             : { id: bob.body.id, schema: "person" }
         );
       }
       const civicPublic = served.find((e) => e.id === civic.body.id)!;
-      expect(civicPublic.values.garage).toEqual({ id: acme.body.id, schema: "company" });
+      expect(civicPublic.values[String(garageField.id)]).toEqual({ id: acme.body.id, schema: "company" });
+    });
+  });
+
+  describe("required schema-ref key guard is pinned (AC 4)", () => {
+    it("the walker fails an entry whose required schema-ref key is absent (negative case)", async () => {
+      const { db, schemaService } = createTestApp();
+      schemaService.create(
+        "person",
+        [{ label: "name", type: "text", required: true }],
+        "editor1"
+      );
+      const car = schemaService.create(
+        "car",
+        [
+          { label: "make", type: "text", required: true },
+          { label: "owner", type: "schema-ref", required: true, ref_schema: "person" },
+        ],
+        "editor1"
+      );
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      // Public body that resolves every value present (a scalar is harmless)
+      // but is missing the required schema-ref key entirely. The walker's
+      // green-while-broken guard must reject it — `expect(...).toHaveProperty`
+      // fails, which surfaces as the throw this test asserts. Removing or
+      // weakening the guard makes this test's toThrow fail.
+      const broken: PublicEntryBody = {
+        id: 1,
+        schema: "car",
+        schema_version: 1,
+        values: { [String(makeField.id)]: "Civic" },
+      };
+      expect(() => assertNoDanglingRefs(db, car, broken)).toThrow(
+        /required schema-ref 'owner'/
+      );
     });
   });
 
@@ -275,11 +322,11 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       const afterBlock = await expectPublicReadClean(app, db, schemaService, "car");
       expect(afterBlock.map((e) => e.id)).toEqual([civic.body.id, accord.body.id]);
       for (const entry of afterBlock) {
-        expect(entry.values.owner).toEqual({ id: alice.body.id, schema: "person" });
+        expect(entry.values[String(ownerField.id)]).toEqual({ id: alice.body.id, schema: "person" });
       }
       const personAfterBlock = await request(app).get("/api/content/person");
       expect(personAfterBlock.status).toBe(200);
-      expect(personAfterBlock.body.map((e: { id: number }) => e.id)).toEqual([alice.body.id]);
+      expect(personAfterBlock.body.entries.map((e: { id: number }) => e.id)).toEqual([alice.body.id]);
 
       // Delete the referencing car entries; Alice's delete then succeeds.
       for (const entry of [civic, accord]) {
@@ -298,7 +345,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       expect(afterDelete).toEqual([]);
       const persons = await request(app).get("/api/content/person");
       expect(persons.status).toBe(200);
-      expect(persons.body).toEqual([]);
+      expect(persons.body.entries).toEqual([]);
     });
   });
 
@@ -342,7 +389,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
 
       // Before the retarget the ref resolves.
       const served = await expectPublicReadClean(app, db, schemaService, "car");
-      expect(served[0].values.owner).toEqual({ id: alice.body.id, schema: "person" });
+      expect(served[0].values[String(ownerField.id)]).toEqual({ id: alice.body.id, schema: "person" });
 
       // Retarget car.owner from person to company via the public schemas route.
       const retarget = await request(app)
@@ -361,7 +408,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       // (a) The affected entry is excluded (conflicted) and 422s by id.
       const list = await request(app).get("/api/content/car");
       expect(list.status).toBe(200);
-      expect(list.body).toEqual([]);
+      expect(list.body.entries).toEqual([]);
       const single = await request(app).get(`/api/content/car/${civic.body.id}`);
       expect(single.status).toBe(422);
 
@@ -382,7 +429,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
 
       // (d) The public read never emits {id: <person entry>, schema: "company"}:
       // nothing is served at all while the entry is unresolved.
-      expect(list.body).toEqual([]);
+      expect(list.body.entries).toEqual([]);
 
       // (c) Re-save with a valid company target un-conflicts the entry.
       const fix = await request(app)
@@ -399,7 +446,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       const after = await expectPublicReadClean(app, db, schemaService, "car");
       expect(after).toHaveLength(1);
       expect(after[0].id).toBe(civic.body.id);
-      expect(after[0].values.owner).toEqual({ id: acme.body.id, schema: "company" });
+      expect(after[0].values[String(ownerField.id)]).toEqual({ id: acme.body.id, schema: "company" });
 
       const resolvedRef = db
         .prepare(
@@ -441,7 +488,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       // Read-path aftermath: no partial/dangling state is observable.
       const car = await expectPublicReadClean(app, db, schemaService, "car");
       expect(car).toHaveLength(1);
-      expect(car[0].values.owner).toEqual({ id: alice.body.id, schema: "person" });
+      expect(car[0].values[String(ownerField.id)]).toEqual({ id: alice.body.id, schema: "person" });
 
       const person = await request(app).get(`/api/content/person/${alice.body.id}`);
       expect(person.status).toBe(200);
@@ -500,7 +547,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       // Neither case yields a reference that fails to resolve on the public read:
       const list = await request(app).get("/api/content/car");
       expect(list.status).toBe(200);
-      expect(list.body).toEqual([]); // the only car entry is held conflicted
+      expect(list.body.entries).toEqual([]); // the only car entry is held conflicted
       const single = await request(app).get(`/api/content/car/${civic.body.id}`);
       expect(single.status).toBe(422);
 
@@ -549,7 +596,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       // Person's public read is unaffected.
       const person = await request(app).get("/api/content/person");
       expect(person.status).toBe(200);
-      expect(person.body.map((e: { id: number }) => e.id)).toEqual([alice.body.id]);
+      expect(person.body.entries.map((e: { id: number }) => e.id)).toEqual([alice.body.id]);
 
       // No content_refs dangle against the cascade-removed car entries.
       const refCount = db.prepare("SELECT COUNT(*) AS n FROM content_refs").get() as {
@@ -623,7 +670,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       // hold is that the public read never emits it: the entry is conflicted.
       const list = await request(app).get("/api/content/car");
       expect(list.status).toBe(200);
-      expect(list.body).toEqual([]);
+      expect(list.body.entries).toEqual([]);
       const single = await request(app).get(`/api/content/car/${civic.body.id}`);
       expect(single.status).toBe(422);
 
@@ -642,7 +689,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
 
       const after = await expectPublicReadClean(app, db, schemaService, "car");
       expect(after).toHaveLength(1);
-      expect(after[0].values.owner).toEqual({ id: acme.body.id, schema: "company" });
+      expect(after[0].values[String(ownerField.id)]).toEqual({ id: acme.body.id, schema: "company" });
 
       const refs = db
         .prepare("SELECT target_content_id FROM content_refs WHERE content_id = ? AND field_id = ?")

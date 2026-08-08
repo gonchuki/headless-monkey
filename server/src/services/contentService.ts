@@ -132,6 +132,11 @@ export class ContentService {
     return { id: existing.record.id, schema: existing.record.schema };
   }
 
+  /** Returns the schema for the public route projection; unknown schema → 404 (same as listPublic/getPublic). */
+  getSchema(schemaName: string): SchemaEntry {
+    return this.requireSchema(schemaName);
+  }
+
   listForSchema(schemaName: string): ContentListEntry[] {
     const schema = this.requireSchema(schemaName);
     return this.repo

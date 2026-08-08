@@ -40,11 +40,17 @@ describe("Public content API (R18-R20)", () => {
   describe("R20 — public routes need no Authorization header", () => {
     it("GET /api/content/:schema works without auth", async () => {
       const { app, schemaService } = createTestApp();
-      makeCarSchema(schemaService);
+      const car = makeCarSchema(schemaService);
 
       const res = await request(app).get("/api/content/car");
       expect(res.status).toBe(200);
-      expect(res.body).toEqual([]);
+      // v0.7 wrapper: {meta, entries}, never a bare array
+      expect(res.body.meta).toEqual({
+        name: "car",
+        version: 1,
+        fields: Object.fromEntries(car.fields.map((f) => [String(f.id), f.label])),
+      });
+      expect(res.body.entries).toEqual([]);
     });
 
     it("GET /api/content/:schema/:id works without auth", async () => {
@@ -61,7 +67,9 @@ describe("Public content API (R18-R20)", () => {
 
       const res = await request(app).get(`/api/content/car/${created.body.id}`);
       expect(res.status).toBe(200);
-      expect(res.body.values.make).toBe("Civic");
+      expect(res.body.meta.name).toBe("car");
+      expect(res.body.entries).toHaveLength(1);
+      expect(res.body.entries[0].values[String(makeField.id)]).toBe("Civic");
     });
   });
 
@@ -114,9 +122,15 @@ describe("Public content API (R18-R20)", () => {
 
       const list = await request(app).get("/api/content/car");
       expect(list.status).toBe(200);
-      expect(list.body.length).toBe(1);
-      expect(list.body[0].id).toBe(e1.body.id);
-      expect(list.body[0].values.make).toBe("Civic");
+      // meta reflects the schema post-renovation: version bumped to 2, vin present
+      expect(list.body.meta.name).toBe("car");
+      expect(list.body.meta.version).toBe(2);
+      expect(list.body.meta.fields[String(makeField.id)]).toBe("make");
+      expect(list.body.meta.fields[String(vinField.id)]).toBe("vin");
+      expect(list.body.entries).toHaveLength(1);
+      expect(list.body.entries[0].id).toBe(e1.body.id);
+      // values are keyed by String(field_id), not field labels
+      expect(list.body.entries[0].values[String(makeField.id)]).toBe("Civic");
     });
 
     it("returns 404 for an unknown schema", async () => {
@@ -139,11 +153,17 @@ describe("Public content API (R18-R20)", () => {
 
       const res = await request(app).get(`/api/content/car/${created.body.id}`);
       expect(res.status).toBe(200);
-      expect(res.body.id).toBe(created.body.id);
-      expect(res.body.schema).toBe("car");
-      expect(res.body.schema_version).toBe(1);
-      expect(res.body.values).toEqual({ make: "Civic" });
-      expect(res.body).not.toHaveProperty("conflict");
+      expect(res.body.meta).toEqual({
+        name: "car",
+        version: 1,
+        fields: Object.fromEntries(car.fields.map((f) => [String(f.id), f.label])),
+      });
+      expect(res.body.entries).toHaveLength(1);
+      expect(res.body.entries[0].id).toBe(created.body.id);
+      expect(res.body.entries[0].schema).toBe("car");
+      expect(res.body.entries[0].schema_version).toBe(1);
+      expect(res.body.entries[0].values).toEqual({ [String(makeField.id)]: "Civic" });
+      expect(res.body.entries[0]).not.toHaveProperty("conflict");
     });
 
     it("enriches schema-ref values as {id, schema} keyed by field label on the public route", async () => {
@@ -187,10 +207,12 @@ describe("Public content API (R18-R20)", () => {
 
       const res = await request(app).get(`/api/content/car/${created.body.id}`);
       expect(res.status).toBe(200);
-      expect(res.body.values).toEqual({
-        make: "Civic",
-        owner: { id: person.body.id, schema: "person" },
+      // schema-ref values keep the {id, schema} enrichment, keyed by String(field_id)
+      expect(res.body.entries[0].values).toEqual({
+        [String(makeField.id)]: "Civic",
+        [String(ownerField.id)]: { id: person.body.id, schema: "person" },
       });
+      expect(res.body.meta.fields[String(ownerField.id)]).toBe("owner");
     });
 
     it("returns 404 for an unknown id", async () => {
