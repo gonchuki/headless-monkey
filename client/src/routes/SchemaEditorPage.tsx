@@ -286,7 +286,15 @@ export default function SchemaEditorPage() {
         disabled={deleted}
         onFieldChange={handleFieldChange}
         onAddField={() => dispatch({ type: "ADD_FIELD" })}
-        onRemoveField={setFieldToDelete}
+        onRemoveField={(index) => {
+          const field = state.fields[index];
+          if (!field) return;
+          if (field.id != null && field.id < 0) {
+            dispatch({ type: "REMOVE_FIELD", index });
+            return;
+          }
+          setFieldToDelete(index);
+        }}
         onMoveUp={handleMoveUp}
         onMoveDown={handleMoveDown}
       />
