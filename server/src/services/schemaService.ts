@@ -22,8 +22,10 @@ export class SchemaServiceError extends Error {
 
 export class SchemaService {
   private repo: SchemaRepository;
+  private db: Db;
 
   constructor(db: Db) {
+    this.db = db;
     this.repo = new SchemaRepository(db);
   }
 
@@ -96,13 +98,17 @@ export class SchemaService {
     // R10: circular reference check (including self-reference)
     this.checkCycle(name, fields);
 
-    // R8: duplicate name → 409
-    if (this.repo.schemaExists(name)) {
-      throw new SchemaServiceError(409, `Schema '${name}' already exists`);
-    }
+    // R8: duplicate name → 409; R11: version=1, compat_version=1.
+    // Check and write run inside one transaction so a concurrent creator cannot
+    // interleave between them (both the row insert and any rolled-back write
+    // are atomic).
+    this.db.transaction(() => {
+      if (this.repo.schemaExists(name)) {
+        throw new SchemaServiceError(409, `Schema '${name}' already exists`);
+      }
 
-    // R11: version=1, compat_version=1
-    this.repo.insertSchema(name, fields, createdBy);
+      this.repo.insertSchema(name, fields, createdBy);
+    })();
 
     return this.repo.getSchema(name)!;
   }
@@ -213,22 +219,26 @@ export class SchemaService {
   }
 
   delete(name: string): void {
-    // R22: check if another schema references this one
-    const referencingSchemas = this.repo.getSchemasReferencing(name);
-    if (referencingSchemas.length > 0) {
-      throw new SchemaServiceError(
-        409,
-        `Cannot delete schema '${name}': referenced by schema(s): ${referencingSchemas.join(", ")}`,
-        { referencingSchemas }
-      );
-    }
+    // R22 succeeds + delete run inside one database transaction so a concurrent
+    // referencer cannot interleave between the check and the delete.
+    this.db.transaction(() => {
+      // R22: check if another schema references this one
+      const referencingSchemas = this.repo.getSchemasReferencing(name);
+      if (referencingSchemas.length > 0) {
+        throw new SchemaServiceError(
+          409,
+          `Cannot delete schema '${name}': referenced by schema(s): ${referencingSchemas.join(", ")}`,
+          { referencingSchemas }
+        );
+      }
 
-    const existing = this.repo.getSchema(name);
-    if (!existing) {
-      throw new SchemaServiceError(404, `Schema '${name}' not found`);
-    }
+      const existing = this.repo.getSchema(name);
+      if (!existing) {
+        throw new SchemaServiceError(404, `Schema '${name}' not found`);
+      }
 
-    this.repo.deleteSchema(name);
+      this.repo.deleteSchema(name);
+    })();
   }
 
   get(name: string): SchemaEntry | null {
