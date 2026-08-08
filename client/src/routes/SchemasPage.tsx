@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { PencilSimple, Plus, Trash } from "@phosphor-icons/react";
+import { ArrowRight, PencilSimple, Plus, Trash } from "@phosphor-icons/react";
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { Skeleton } from "@/components/shared/Skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -103,6 +103,16 @@ export default function SchemasPage() {
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`View entries for ${schema.name}`}
+                    disabled={deleted}
+                    onClick={() => navigate(`/content/${encodeURIComponent(schema.name)}`)}
+                  >
+                    <ArrowRight className="size-4" aria-hidden="true" />
+                  </Button>
                   <Button
                     type="button"
                     variant="ghost"
