@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { openDatabase } from "../src/db/database";
 import { SchemaService, SchemaServiceError } from "../src/services/schemaService";
 import { SchemaRepository } from "../src/repositories/schemaRepo";
+import {
+  ContentService,
+  ContentServiceError,
+} from "../src/services/contentService";
 
 function createService() {
   const db = openDatabase();
@@ -674,6 +678,297 @@ describe("SchemaService", () => {
         .prepare(`SELECT schema_version FROM content WHERE id = ?`)
         .get(entryId1) as { schema_version: number };
       expect(entry.schema_version).toBe(2); // new version after delete
+    });
+  });
+
+  describe("ref-target retarget purge (R35)", () => {
+    it("retargeting a required schema-ref purges refs, does not bump schema_version, and keeps the entry conflicted", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("company", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ], "editor1");
+
+      // Do not hardcode field ids: updateField is scoped only by field id, not
+      // by schema, and the id assignment depends on insertion order.
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const personNameField = person.fields[0];
+
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      // Sanity: the ref row exists before the retarget.
+      const refBefore = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refBefore).toBeDefined();
+
+      // Retarget owner person → company.
+      const updated = schemaService.update(
+        "car",
+        [
+          { id: makeField.id, label: "make", type: "text", required: true },
+          { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+        ],
+        "editor1"
+      );
+
+      // Purge: no content_refs for the owner field of the schema's entries.
+      const refAfter = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refAfter).toBeUndefined();
+
+      // No schema_version bump: the entry keeps its pre-update value.
+      const entry = db
+        .prepare("SELECT schema_version FROM content WHERE id = ?")
+        .get(carEntry.id) as { schema_version: number };
+      expect(entry.schema_version).toBe(carEntry.schema_version);
+
+      // The retarget is breaking: compat_version equals the new version.
+      expect(updated.version).toBe(2);
+      expect(updated.compat_version).toBe(2);
+
+      // Conflict persists → public API excludes the entry / 422s on read.
+      expect(contentService.listPublic("car")).toHaveLength(0);
+      let caught: unknown;
+      try {
+        contentService.getPublic("car", carEntry.id);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ContentServiceError);
+      expect((caught as ContentServiceError).statusCode).toBe(422);
+    });
+
+    it("required schema-ref retarget: same purge, no bump, still conflicted", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("company", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: true, ref_schema: "person" },
+      ], "editor1");
+
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const personNameField = person.fields[0];
+
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      schemaService.update(
+        "car",
+        [
+          { id: makeField.id, label: "make", type: "text", required: true },
+          { id: ownerField.id, label: "owner", type: "schema-ref", required: true, ref_schema: "company" },
+        ],
+        "editor1"
+      );
+
+      const refAfter = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refAfter).toBeUndefined();
+
+      const entry = db
+        .prepare("SELECT schema_version FROM content WHERE id = ?")
+        .get(carEntry.id) as { schema_version: number };
+      expect(entry.schema_version).toBe(carEntry.schema_version);
+
+      expect(contentService.listPublic("car")).toHaveLength(0);
+      let caught: unknown;
+      try {
+        contentService.getPublic("car", carEntry.id);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ContentServiceError);
+      expect((caught as ContentServiceError).statusCode).toBe(422);
+    });
+
+    it("mixed PATCH (delete field + retarget) purges without a schema-wide schema_version bump", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("company", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ], "editor1");
+
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const colorField = car.fields.find((f) => f.label === "color")!;
+      const personNameField = person.fields[0];
+
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+      const carEntry = contentService.create(
+        "car",
+        {
+          [String(makeField.id)]: "Civic",
+          [String(colorField.id)]: "Red",
+          [String(ownerField.id)]: personEntry.id,
+        },
+        "editor1"
+      );
+
+      // One PATCH: delete the color field AND retarget owner person → company.
+      const updated = schemaService.update(
+        "car",
+        [
+          { id: makeField.id, label: "make", type: "text", required: true },
+          { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+        ],
+        "editor1"
+      );
+
+      // The color field is gone and somehow the composite is breaking.
+      expect(updated.fields.map((f) => f.label)).not.toContain("color");
+      expect(updated.compat_version).toBe(updated.version);
+
+      // The purge still ran for the retargeted field…
+      const refAfter = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refAfter).toBeUndefined();
+
+      // …but the schema-wide R21 bump was gated off: schema_version unchanged.
+      const entry = db
+        .prepare("SELECT schema_version FROM content WHERE id = ?")
+        .get(carEntry.id) as { schema_version: number };
+      expect(entry.schema_version).toBe(carEntry.schema_version);
+
+      // The entry stays conflicted (missing a valid owner target) → excluded.
+      expect(contentService.listPublic("car")).toHaveLength(0);
+    });
+
+    it("retargeting an already-conflicted entry purges it and leaves it conflicted", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("company", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ], "editor1");
+
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const personNameField = person.fields[0];
+
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      // Change that does not bump schema_version but makes the schema breaking:
+      // add a required field → compat_version = 2, entry stays at 1 → conflicted.
+      const withVin = schemaService.update(
+        "car",
+        [
+          { id: makeField.id, label: "make", type: "text", required: true },
+          { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+          { label: "vin", type: "text", required: true },
+        ],
+        "editor1"
+      );
+      const vinField = withVin.fields.find((f) => f.label === "vin")!;
+      expect(contentService.listForSchema("car")[0].conflict).toBe(true);
+
+      // The ref row still exists after that first update (no retarget yet).
+      const refBefore = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refBefore).toBeDefined();
+
+      // Retarget owner person → company.
+      schemaService.update(
+        "car",
+        [
+          { id: makeField.id, label: "make", type: "text", required: true },
+          { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+          { id: vinField.id, label: "vin", type: "text", required: true },
+        ],
+        "editor1"
+      );
+
+      // Purged, never bumped, still conflicted.
+      const refAfter = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refAfter).toBeUndefined();
+
+      const entry = db
+        .prepare("SELECT schema_version FROM content WHERE id = ?")
+        .get(carEntry.id) as { schema_version: number };
+      expect(entry.schema_version).toBe(carEntry.schema_version);
+
+      expect(contentService.listPublic("car")).toHaveLength(0);
+      let caught: unknown;
+      try {
+        contentService.getPublic("car", carEntry.id);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ContentServiceError);
+      expect((caught as ContentServiceError).statusCode).toBe(422);
     });
   });
 

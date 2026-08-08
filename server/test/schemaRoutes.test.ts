@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import { openDatabase } from "../src/db/database";
 import { SchemaService } from "../src/services/schemaService";
+import { ContentService } from "../src/services/contentService";
 import { createSchemasRouter } from "../src/routes/schemas";
 import express from "express";
 
@@ -623,6 +624,62 @@ describe("Schema Routes", () => {
         .prepare(`SELECT schema_version FROM content WHERE id = ?`)
         .get(entryId) as { schema_version: number };
       expect(entry.schema_version).toBe(2);
+    });
+  });
+
+  describe("ref-target retarget purge (R35)", () => {
+    it("PATCH 200, purges content_refs, leaves schema_version unchanged", async () => {
+      const { app, schemaService, db } = createTestApp();
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("company", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ], "editor1");
+
+      const personNameField = person.fields[0];
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      // Retarget owner person → company via the API.
+      const res = await request(app)
+        .patch("/api/schemas/car")
+        .send({
+          fields: [
+            { id: makeField.id, label: "make", type: "text", required: true },
+            { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+
+      // Direct DB assertions mirroring the R21 route test style.
+      const refRows = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refRows).toBeUndefined();
+
+      const entry = db
+        .prepare("SELECT schema_version FROM content WHERE id = ?")
+        .get(carEntry.id) as { schema_version: number };
+      expect(entry.schema_version).toBe(carEntry.schema_version);
     });
   });
 });

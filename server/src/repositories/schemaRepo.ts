@@ -129,14 +129,33 @@ export class SchemaRepository {
     version: number,
     compatVersion: number,
     modifiedBy: string,
-    deletedFieldIds: number[]
+    deletedFieldIds: number[],
+    retargetedFieldIds: number[]
   ): void {
     const now = new Date().toISOString();
 
-    if (deletedFieldIds.length > 0) {
+    // R35: purge content_refs for schema-ref fields whose ref_schema changed.
+    // Scoped to this schema's entries, and runs BEFORE the deleted-fields block
+    // so a mid-edit state never exposes stale targets. No schema_version bump
+    // here: the retarget is already breaking (compat_version above), so the
+    // entries must stay conflicted until an editor re-selects a target.
+    if (retargetedFieldIds.length > 0) {
+      const placeholders = retargetedFieldIds.map(() => "?").join(", ");
+      this.db
+        .prepare(
+          `DELETE FROM content_refs WHERE field_id IN (${placeholders}) AND content_id IN (SELECT id FROM content WHERE schema = ?)`
+        )
+        .run(...retargetedFieldIds, schemaName);
+    }
+
+    if (deletedFieldIds.length > 0 && retargetedFieldIds.length === 0) {
       // R21: field deletion bumps every surviving entry's schema_version. The
       // content_rows removal for deleted fields is handled by the DDL's
       // `schema_fields.id` ON DELETE CASCADE (no manual prune needed).
+      //
+      // The bump is schema-wide and therefore gated on there being no retarget
+      // (R35): a mixed PATCH (delete field X + retarget field Y) must not
+      // un-conflict entries that still miss a valid target for Y.
       this.db
         .prepare("UPDATE content SET schema_version = ? WHERE schema = ?")
         .run(version, schemaName);
