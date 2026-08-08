@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { openDatabase } from "../src/db/database";
 import { SchemaService, SchemaServiceError } from "../src/services/schemaService";
+import { SchemaRepository } from "../src/repositories/schemaRepo";
 
 function createService() {
   const db = openDatabase();
@@ -520,6 +521,116 @@ describe("SchemaService", () => {
       service.delete("car");
       // Now person can be deleted
       expect(() => service.delete("person")).not.toThrow();
+    });
+  });
+
+  describe("interleaving atomicity (check-then-act races)", () => {
+    it("create holds duplicate-check + insert in one transaction", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+
+      // Competitor inserts a full, DDL-valid `car` row at the exact moment the
+      // duplicate-name check runs, then lies that the name is free. The
+      // duplicate check must pass (`false`) and the following insertSchema
+      // must hit the UNIQUE constraint on schemas.name.
+      const now = new Date().toISOString();
+      const insertCompetitor = db.prepare(
+        `INSERT INTO schemas (name, creation_date, created_by, last_modified_date, last_modified_by, version, compat_version)
+         VALUES (?, ?, ?, ?, ?, 1, 1)`
+      );
+
+      const originalSchemaExists = SchemaRepository.prototype.schemaExists;
+      const spy = vi
+        .spyOn(SchemaRepository.prototype, "schemaExists")
+        .mockImplementation(function (this: SchemaRepository, name: string) {
+          if (name === "car") {
+            insertCompetitor.run("car", now, "editor1", now, "editor1");
+            return false;
+          }
+          return originalSchemaExists.call(this, name);
+        });
+
+      try {
+        // Any error is fine — the constraint failure surfaces as a raw
+        // SqliteError here, not necessarily a SchemaServiceError.
+        expect(() =>
+          service.create("car", [
+            { label: "make", type: "text", required: true },
+          ], "editor1")
+        ).toThrow();
+
+        // The transaction was rolled back: the competitor's row must not
+        // survive, otherwise a non-wrapped implementation would pass (its
+        // injected row autocommits and persists).
+        const rows = db
+          .prepare(`SELECT name FROM schemas WHERE name = ?`)
+          .all("car");
+        expect(rows).toHaveLength(0);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("delete holds R22 referencer check + delete in one transaction", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+
+      service.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      // car really references person → the real query returns ["car"].
+      service.create("car", [
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+      // truck must already exist: people the injected schema field references
+      // `schemas(name)`, so the truck row has to be there first.
+      service.create("truck", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+
+      // The spy returns the real check result (["car"]) so the check still
+      // sees car and throws R22 409; by then a competitor has inserted a new
+      // `truck` reference. If the check and the delete do not share one
+      // transaction, the injected row autocommits and survives.
+      const originalGetSchemasReferencing =
+        SchemaRepository.prototype.getSchemasReferencing;
+      const spy = vi
+        .spyOn(SchemaRepository.prototype, "getSchemasReferencing")
+        .mockImplementation(function (this: SchemaRepository, schemaName: string) {
+          const result = originalGetSchemasReferencing.call(this, schemaName);
+          if (schemaName === "person") {
+            db.prepare(
+              `INSERT INTO schema_fields (schema, label, type, required, ref_schema, sort_order)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            ).run("truck", "injected_owner", "schema-ref", 1, "person", 1);
+          }
+          return result;
+        });
+
+      try {
+        let thrown: unknown;
+        try {
+          service.delete("person");
+        } catch (err) {
+          thrown = err;
+        }
+        expect(thrown).toBeInstanceOf(SchemaServiceError);
+        expect((thrown as SchemaServiceError).statusCode).toBe(409);
+
+        // The injected truck reference was rolled back with the transaction.
+        const truckRows = db
+          .prepare(
+            `SELECT schema FROM schema_fields WHERE schema = 'truck' AND ref_schema = 'person'`
+          )
+          .all();
+        expect(truckRows).toHaveLength(0);
+
+        // The referenced person still exists (nothing was committed).
+        expect(service.get("person")).not.toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 
