@@ -15,7 +15,7 @@ export function SchemaBadge({ bgcolor, textcolor, className, children }: PropsWi
         backgroundColor: bgcolor,
         color: textcolor,
       }}
-      aria-hidden="true"
+      aria-hidden={!children}
     >
       {children}
     </span>
