@@ -1,5 +1,6 @@
-# SPEC: headless-monkey CMS (v0.6 — 2026-08-08)
+# SPEC: headless-monkey CMS (v0.7 — 2026-08-08)
 
+v0.7 — BREAKING: the public content API returns a {meta, entries} wrapper with values keyed by String(field_id) (not label) and a meta.fields id→label map; schema-ref storage moves to a normalized content_refs table; deleting a referenced entry is blocked (R34); ref_schema retargeting purges refs and leaves affected entries conflicted until re-edited (R35); §2 R15/R18/R19/R21, §4, §5, §7
 v0.6 — BREAKING: the public content API `values` responses are keyed by field label (not numeric `field_id`) and schema-ref values serialize as `{id, schema}` instead of the raw target id; the editor content routes keep `field_id`-keyed `values` with raw schema-ref numbers (§2 R15, §4, §7)
 v0.5 — schema fields must have non-empty labels and every schema needs at least one required field (§2 R8, R30)
 v0.4 — corrected UI component mapping: user confirmations use `<AlertDialog />`; `<Alert />` is the passive banner; `<Toast />` is the notification toast (§2 R22, R24, R26; §5)
@@ -29,16 +30,18 @@ Schema model & versioning
 - R12. Every schema update increments `version` by exactly 1.
 - R13. Non-breaking changes keep `compat_version` unchanged: adding an *optional* field; changing `number→text`; changing `required→optional`; renaming a field label; reordering fields.
 - R14. Every other change sets `compat_version = version`: adding a *required* field; deleting a field; `text→number`; `optional→required`; any change into/out of `boolean`, `date`, or `schema-ref`; changing a `schema-ref`'s `ref_schema`.
-- R15. Fields are referenced by stable numeric `field_id` in content rows, write payloads, editor `values` responses, and SSE events, never by label; renaming a label changes no stored data and does not invalidate content. Public content API `values` responses are keyed by the field's unique label (R8 guarantees labels are unique per schema) so consumers get self-describing responses: `field_id` is the write-side and editor read-side key, label is the public read-side key.
+- R15. Fields are referenced by stable numeric `field_id` in content rows, write payloads, editor `values` responses, public API `values`, and SSE events — never by label; renaming a label changes no stored data and does not invalidate content. The public API is self-describing through `meta.fields` (a `String(field_id)` → current label map), so consumers can render labels and detect shape drift by comparing `meta.version` against the version they were built for.
 
 Content & public API
-- R16. Creating an entry requires every required field to have a value valid for its type; a required `text` field must be non-empty. Violation returns 422. Unknown `field_id` returns 422. A `schema-ref` value must reference an existing entry id of the target schema; violation returns 422.
+- R16. Creating an entry requires every required field to have a value valid for its type; a required `text` field must be non-empty. Violation returns 422. Unknown `field_id` returns 422. A `schema-ref` value must reference an existing entry id of the target schema; violation returns 422. An *optional* schema-ref field with no target is omitted from `values` (absent key), never serialized as `null`.
 - R17. Saving an entry sets its `schema_version` to the schema's current `version` (conflict is resolved by the edit itself). On save, values that coerce losslessly into a changed field type (only `number`→`text`) are carried over; values invalid for the new type must be re-entered.
-- R18. `GET /api/content/:schema` returns 200 with only valid entries (`schema_version >= compat_version`). Unknown schema returns 404.
-- R19. `GET /api/content/:schema/:id` returns 200 for a valid entry, 404 if the id does not exist, and 422 if the entry exists but is conflicted (`schema_version < compat_version`). Neither is ever returned together.
+- R18. `GET /api/content/:schema` returns 200 with a `{meta, entries}` response containing only valid entries (`schema_version >= compat_version`); unknown schema returns 404.
+- R19. `GET /api/content/:schema/:id` returns 200 with the same `{meta, entries}` shape and a one-element `entries` array for a valid entry, 404 if the id does not exist, 422 if the entry exists but is conflicted (`schema_version < compat_version`).
 - R20. The public data API is unauthenticated and stateless: R4's auth guard does not apply to it.
-- R21. Deleting a field propagates: that field's `content_rows` are removed from every entry of the schema, and each surviving entry's `schema_version` is set to the schema's current `version`.
+- R21. Deleting a field propagates: that field's `content_rows` and `content_refs` are removed from every entry of the schema, and each surviving entry's `schema_version` is set to the schema's current `version`.
 - R22. Deleting a schema cascades: its fields and all its content (rows included) are deleted. No content can exist without its schema. The delete confirmation (`<AlertDialog />`) warns with the affected content count before the cascade.
+- R34. Deleting an entry that is the target of any other entry's schema-ref value returns 409 naming the referencer count; the delete confirmation warns against that count before the attempt. This is the entry-level mirror of R22.
+- R35. Changing a schema-ref field's `ref_schema` propagates: that field's `content_refs` are removed from every entry of the schema, and the affected entries stay conflicted until re-edited — `schema_version` is **not** bumped (the entry is incomplete without a target for the still-existing field; the `compat_version` bump already carries the conflict). This is the R21-style propagation applied to a ref-target change, minus the version bump.
 
 Multi-user (SSE)
 - R23. `GET /api/events` (Bearer auth) streams SSE. Events: `schema.created`, `schema.updated` (with a `changes` list), `schema.deleted`, `entry.created`, `entry.updated`, `entry.deleted`.
@@ -68,39 +71,51 @@ DB (SQLite via better-sqlite3):
 users(id INTEGER PK AUTOINCREMENT, login TEXT NOT NULL UNIQUE,
       hashed_password TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0);
 
-schemas(name TEXT PK, creation_date TEXT, created_by TEXT,
-        last_modified_date TEXT, last_modified_by TEXT,
+schemas(name TEXT PK, creation_date TEXT NOT NULL, created_by TEXT NOT NULL,
+        last_modified_date TEXT NOT NULL, last_modified_by TEXT NOT NULL,
         version INTEGER NOT NULL, compat_version INTEGER NOT NULL);
 
-schema_fields(id INTEGER PK AUTOINCREMENT, schema TEXT NOT NULL REFERENCES schemas(name),
+schema_fields(id INTEGER PK AUTOINCREMENT,
+      schema TEXT NOT NULL REFERENCES schemas(name) ON DELETE CASCADE,
       label TEXT NOT NULL, type TEXT NOT NULL
         CHECK(type IN ('text','number','boolean','date','schema-ref')),
-      required INTEGER NOT NULL, ref_schema TEXT, sort_order INTEGER NOT NULL);
+      required INTEGER NOT NULL, ref_schema TEXT, sort_order INTEGER NOT NULL,
+      UNIQUE (schema, label),
+      CHECK (type != 'schema-ref' OR ref_schema IS NOT NULL));
 
-content(id INTEGER PK AUTOINCREMENT, schema TEXT NOT NULL REFERENCES schemas(name),
-      schema_version INTEGER NOT NULL, creation_date TEXT, created_by TEXT,
-      last_modified_date TEXT, last_modified_by TEXT);
+content(id INTEGER PK AUTOINCREMENT,
+      schema TEXT NOT NULL REFERENCES schemas(name) ON DELETE CASCADE,
+      schema_version INTEGER NOT NULL, creation_date TEXT NOT NULL,
+      created_by TEXT NOT NULL, last_modified_date TEXT NOT NULL,
+      last_modified_by TEXT NOT NULL);
 
 content_rows(content_id INTEGER NOT NULL REFERENCES content(id) ON DELETE CASCADE,
-      field_id INTEGER NOT NULL REFERENCES schema_fields(id),
+      field_id INTEGER NOT NULL REFERENCES schema_fields(id) ON DELETE CASCADE,
       value TEXT, PRIMARY KEY(content_id, field_id));
+
+content_refs(content_id INTEGER NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+      field_id INTEGER NOT NULL REFERENCES schema_fields(id) ON DELETE CASCADE,
+      target_content_id INTEGER NOT NULL REFERENCES content(id) ON DELETE RESTRICT,
+      PRIMARY KEY(content_id, field_id));
+
+CREATE INDEX idx_content_refs_target ON content_refs(target_content_id);
 ```
 
 JWT: HS256, secret `JWT_SECRET` (`.env`), payload `{ sub: <login>, role: 'admin'|'editor', iat, exp }`, expiry 8h. Sent as `Authorization: Bearer <token>`.
 
 Public API (no auth):
-- `GET /api/content/:schema` → 200 `[{ id, schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by, values: { <label>: <value> } }]` (valid entries only); 404 unknown schema.
-- `GET /api/content/:schema/:id` → same single-object shape; 404 unknown id; 422 conflicted.
-- `values` keys are field labels (unique per schema, R8/R15) rather than numeric `field_id`s. Schema-ref values serialize as `{id: <target_entry_id>, schema: <ref_schema_name>}` instead of the raw target content id.
+- `GET /api/content/:schema` → 200 `{ meta: { name, version, fields: { "<field_id>": "<label>", ... } }, entries: [ { id, schema_version, values: { "<field_id>": <value>, ... } } ] }` (valid entries only); 404 unknown schema.
+- `GET /api/content/:schema/:id` → the same `{meta, entries}` shape with a one-element `entries` array; 404 unknown id; 422 conflicted.
+- `values` keys are `String(field_id)` (the stable id, unique across versions by R13's id-stable contract); labels are provided by `meta.fields` for display and for detecting renames; schema-ref values serialize as `{id: <target_entry_id>, schema: <ref_schema_name>}`. There is no version header — `meta.version` is authoritative.
 
 Auth & control panel (Bearer auth unless noted):
 - `POST /api/auth/login` `{login,password}` → `{token}` (no auth). `POST /api/auth/logout` → 204. `GET /api/auth/me` → `{login, role}`.
 - Users (admin only): `GET /api/users`; `POST /api/users` `{login,password}`; `PATCH /api/users/:id` `{password?, disabled?}`; `DELETE /api/users/:id`.
 - Schemas (editor): `GET /api/schemas`; `POST /api/schemas` `{name, fields:[{label,type,required,ref_schema?}]}`; `GET /api/schemas/:name`; `PATCH /api/schemas/:name` (same `fields` shape; existing fields carry their `id`, new fields omit it, absent ids are deleted); `DELETE /api/schemas/:name`.
-- Content (editor): `GET /api/schemas/:name/entries` (all entries incl. conflicted, each with `conflict: boolean`; `values` keyed by `String(field_id)` with schema-ref values as raw target content-id numbers — the editor shape, explicitly distinct from the public API's label-keyed shape); `POST /api/schemas/:name/entries`; `PATCH /api/entries/:id`; `DELETE /api/entries/:id`. Editor `POST`/`PATCH` responses carry the same field_id-keyed `values` shape.
+- Content (editor): `GET /api/schemas/:name/entries` (all entries incl. conflicted, each with `conflict: boolean`; `values` keyed by `String(field_id)` with schema-ref values as raw target content-id numbers — the editor shape, distinctly field_id-keyed from the public API's `{meta, entries}` wrapper); `POST /api/schemas/:name/entries`; `PATCH /api/entries/:id`; `DELETE /api/entries/:id`. Editor `POST`/`PATCH` responses carry the same field_id-keyed `values` shape.
 - SSE: `GET /api/events` (Bearer). Event JSON: `{ type, schema, entryId?, version?, compatVersion?, by, changes? }`; `changes: [{ kind: 'renamed'|'added'|'deleted'|'typeChanged'|'requiredChanged'|'reordered', fieldId?, label?, type?, required? }]`.
 
-Value serialization: in `content_rows.value` (DB storage, JSON-encoded TEXT): text→string; number→number; boolean→boolean; date→`"YYYY-MM-DD"`; schema-ref→target content id (number). API `values` responses use the same per-type encoding except schema-ref values, which are enriched to `{id: <target_entry_id>, schema: <ref_schema_name>}` (see the public API contract above).
+Value serialization: `content_rows.value` (DB storage, JSON-encoded TEXT) holds `text|number|boolean|date` scalars only — text→string; number→number; boolean→boolean; date→`"YYYY-MM-DD"`. Schema-ref targets are stored as INTEGER in `content_refs.target_content_id`, never as a JSON number in `content_rows.value`. Public `values` use the same per-type encoding, with schema-ref values enriched to `{id: <target_entry_id>, schema: <ref_schema_name>}`. An optional schema-ref field with no target is omitted (absent key).
 
 ## 5. Constraints & invariants (binding)
 
@@ -112,6 +127,8 @@ Value serialization: in `content_rows.value` (DB storage, JSON-encoded TEXT): te
 - One component per `.tsx` file. State via `useReducer`/query state; no `useEffect`+`useRef` indirection for data.
 - Circular `schema-ref` detection must hold across the full schema graph, not just direct neighbors.
 - Deleting a schema that is referenced by another schema's `schema-ref` field is blocked with 409 naming the referencing schema (prevents dangling refs).
+- Conflict is version-only (`schema_version < compat_version`); referential integrity is guaranteed by construction because referenced-entry deletion is blocked (R34) and `ref_schema` retargeting purges refs (R35).
+- Deleting an entry that is referenced by another entry's schema-ref value is blocked with 409 naming the referencer count (R34); deleting a schema that is referenced by another schema's `schema-ref` field is blocked with 409 naming the referencing schema (existing invariant, unchanged).
 
 ## 6. Suggested approach (negotiable)
 
@@ -134,7 +151,7 @@ compat transitions (single field change, `version` always +1):
 
 API status codes: `GET /api/content/car` → 200 (valid only) / 404 (unknown schema). `GET /api/content/car/7` → 200 / 404 (no entry 7) / 422 (entry 7 exists, conflicted). Editing a conflicted entry → it becomes valid (R17). Deleting field `f3` of schema `car` → every `car` entry loses row `(entryId, f3)` and gets `schema_version = car.version`.
 
-Serialization: `values: { "make": "Civic", "year": 2019, "active": true, "built": "2021-05-04", "owner": { "id": 42, "schema": "person" } }` — keys are field labels; the `schema-ref` value is enriched to `{id, schema}`.
+Serialization: `GET /api/content/person` → `{ "meta": { "name": "person", "version": 3, "fields": { "5": "name", "6": "age" } }, "entries": [ { "id": 10, "schema_version": 2, "values": { "5": "Ada", "6": 36 } } ] }`. A schema-ref value serializes as `{ "id": 42, "schema": "person" }` under a `String(field_id)` key.
 
 ## 8. Plan
 
