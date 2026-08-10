@@ -19,24 +19,24 @@ function handleError(res: Response, err: unknown): void {
   }
 }
 
-interface PublicContentMeta {
+interface PublicSchemaDescriptor {
   name: string;
   version: number;
   fields: Record<string, string>;
 }
 
 interface PublicContentResponse {
-  meta: PublicContentMeta;
-  entries: ContentEntry[];
+  schema: PublicSchemaDescriptor;
+  entries: Omit<ContentEntry, "schema">[];
 }
 
 /**
  * SPEC v0.7 public wire projection. Built at the HTTP boundary only: the
  * service still returns the label-keyed public shape (contentService.test.ts
  * pins it), and this is the single place that re-keys values to
- * String(field_id) and emits the {meta, entries} wrapper (SPEC §4, R15/R18/R19).
+ * String(field_id) and emits the {schema, entries} wrapper (SPEC §4, R15/R18/R19).
  */
-function buildMeta(schema: SchemaEntry): PublicContentMeta {
+function buildSchema(schema: SchemaEntry): PublicSchemaDescriptor {
   return {
     name: schema.name,
     version: schema.version,
@@ -59,6 +59,19 @@ function rekeyValues(
   return values;
 }
 
+/**
+ * Public entry projection: strips the redundant entry-level `schema` field
+ * (the envelope's schema.name already names the schema) and re-keys values.
+ * Only the public wire strips it — the editor shape keeps `schema`.
+ */
+function toPublicEntry(
+  entry: ContentEntry,
+  labelToId: Map<string, number>
+): Omit<ContentEntry, "schema"> {
+  const { schema: _schema, ...rest } = entry;
+  return { ...rest, values: rekeyValues(entry, labelToId) };
+}
+
 export function createContentRouter(contentService: ContentService): Router {
   const router: Router = Router();
 
@@ -69,8 +82,8 @@ export function createContentRouter(contentService: ContentService): Router {
       const labelToId = new Map(schema.fields.map((f) => [f.label, f.id]));
       const entries = contentService.listPublic(schemaName);
       const body: PublicContentResponse = {
-        meta: buildMeta(schema),
-        entries: entries.map((entry) => ({ ...entry, values: rekeyValues(entry, labelToId) })),
+        schema: buildSchema(schema),
+        entries: entries.map((entry) => toPublicEntry(entry, labelToId)),
       };
       res.json(body);
     } catch (err) {
@@ -86,8 +99,8 @@ export function createContentRouter(contentService: ContentService): Router {
       const labelToId = new Map(schema.fields.map((f) => [f.label, f.id]));
       const entry = contentService.getPublic(schemaName, id);
       const body: PublicContentResponse = {
-        meta: buildMeta(schema),
-        entries: [{ ...entry, values: rekeyValues(entry, labelToId) }],
+        schema: buildSchema(schema),
+        entries: [toPublicEntry(entry, labelToId)],
       };
       res.json(body);
     } catch (err) {

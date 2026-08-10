@@ -44,12 +44,13 @@ describe("Public content API (R18-R20)", () => {
 
       const res = await request(app).get("/api/content/car");
       expect(res.status).toBe(200);
-      // v0.7 wrapper: {meta, entries}, never a bare array
-      expect(res.body.meta).toEqual({
+      // v0.7 wrapper: {schema, entries}, never a bare array; the old `meta` key is gone
+      expect(res.body.schema).toEqual({
         name: "car",
         version: 1,
         fields: Object.fromEntries(car.fields.map((f) => [String(f.id), f.label])),
       });
+      expect(res.body).not.toHaveProperty("meta");
       expect(res.body.entries).toEqual([]);
     });
 
@@ -67,8 +68,10 @@ describe("Public content API (R18-R20)", () => {
 
       const res = await request(app).get(`/api/content/car/${created.body.id}`);
       expect(res.status).toBe(200);
-      expect(res.body.meta.name).toBe("car");
+      expect(res.body.schema.name).toBe("car");
+      expect(res.body).not.toHaveProperty("meta");
       expect(res.body.entries).toHaveLength(1);
+      expect(res.body.entries[0]).not.toHaveProperty("schema");
       expect(res.body.entries[0].values[String(makeField.id)]).toBe("Civic");
     });
   });
@@ -122,12 +125,14 @@ describe("Public content API (R18-R20)", () => {
 
       const list = await request(app).get("/api/content/car");
       expect(list.status).toBe(200);
-      // meta reflects the schema post-renovation: version bumped to 2, vin present
-      expect(list.body.meta.name).toBe("car");
-      expect(list.body.meta.version).toBe(2);
-      expect(list.body.meta.fields[String(makeField.id)]).toBe("make");
-      expect(list.body.meta.fields[String(vinField.id)]).toBe("vin");
+      // schema reflects the schema post-renovation: version bumped to 2, vin present
+      expect(list.body.schema.name).toBe("car");
+      expect(list.body.schema.version).toBe(2);
+      expect(list.body.schema.fields[String(makeField.id)]).toBe("make");
+      expect(list.body.schema.fields[String(vinField.id)]).toBe("vin");
+      expect(list.body).not.toHaveProperty("meta");
       expect(list.body.entries).toHaveLength(1);
+      expect(list.body.entries[0]).not.toHaveProperty("schema");
       expect(list.body.entries[0].id).toBe(e1.body.id);
       // values are keyed by String(field_id), not field labels
       expect(list.body.entries[0].values[String(makeField.id)]).toBe("Civic");
@@ -153,14 +158,16 @@ describe("Public content API (R18-R20)", () => {
 
       const res = await request(app).get(`/api/content/car/${created.body.id}`);
       expect(res.status).toBe(200);
-      expect(res.body.meta).toEqual({
+      expect(res.body.schema).toEqual({
         name: "car",
         version: 1,
         fields: Object.fromEntries(car.fields.map((f) => [String(f.id), f.label])),
       });
+      expect(res.body).not.toHaveProperty("meta");
       expect(res.body.entries).toHaveLength(1);
       expect(res.body.entries[0].id).toBe(created.body.id);
-      expect(res.body.entries[0].schema).toBe("car");
+      // The envelope's schema.name names the schema; the entry itself must not repeat it.
+      expect(res.body.entries[0]).not.toHaveProperty("schema");
       expect(res.body.entries[0].schema_version).toBe(1);
       expect(res.body.entries[0].values).toEqual({ [String(makeField.id)]: "Civic" });
       expect(res.body.entries[0]).not.toHaveProperty("conflict");
@@ -212,7 +219,7 @@ describe("Public content API (R18-R20)", () => {
         [String(makeField.id)]: "Civic",
         [String(ownerField.id)]: { id: person.body.id, schema: "person" },
       });
-      expect(res.body.meta.fields[String(ownerField.id)]).toBe("owner");
+      expect(res.body.schema.fields[String(ownerField.id)]).toBe("owner");
     });
 
     it("returns 404 for an unknown id", async () => {

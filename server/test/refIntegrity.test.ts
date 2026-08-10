@@ -36,7 +36,6 @@ function editorToken(): string {
 
 interface PublicEntryBody {
   id: number;
-  schema: string;
   schema_version: number;
   values: Record<string, unknown>;
 }
@@ -96,7 +95,7 @@ function assertNoDanglingRefs(db: Db, schema: SchemaEntry, entry: PublicEntryBod
 
 /**
  * Runs the invariant against both public reads: the (R18) list endpoint and
- * every (R19) `:id` single-entry lookup, on the v0.7 {meta, entries} wrapper.
+ * every (R19) `:id` single-entry lookup, on the v0.7 {schema, entries} wrapper.
  * Returns the entries array for the caller.
  */
 async function expectPublicReadClean(
@@ -110,17 +109,17 @@ async function expectPublicReadClean(
 
   const res = await request(app).get(`/api/content/${schemaName}`);
   expect(res.status).toBe(200);
-  const body = res.body as { meta: { name: string }; entries: PublicEntryBody[] };
-  expect(body.meta).toBeDefined();
-  expect(body.meta.name).toBe(schemaName);
+  const body = res.body as { schema: { name: string }; entries: PublicEntryBody[] };
+  expect(body.schema).toBeDefined();
+  expect(body.schema.name).toBe(schemaName);
   expect(Array.isArray(body.entries)).toBe(true);
   for (const entry of body.entries) {
     assertNoDanglingRefs(db, schema!, entry);
 
     const single = await request(app).get(`/api/content/${schemaName}/${entry.id}`);
     expect(single.status).toBe(200);
-    const singleBody = single.body as { meta: { name: string }; entries: PublicEntryBody[] };
-    expect(singleBody.meta.name).toBe(schemaName);
+    const singleBody = single.body as { schema: { name: string }; entries: PublicEntryBody[] };
+    expect(singleBody.schema.name).toBe(schemaName);
     expect(singleBody.entries).toHaveLength(1);
     assertNoDanglingRefs(db, schema!, singleBody.entries[0]);
   }
@@ -268,7 +267,6 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       // weakening the guard makes this test's toThrow fail.
       const broken: PublicEntryBody = {
         id: 1,
-        schema: "car",
         schema_version: 1,
         values: { [String(makeField.id)]: "Civic" },
       };
