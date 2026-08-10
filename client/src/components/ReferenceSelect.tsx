@@ -11,6 +11,8 @@ import { apiFetch, type ContentListEntry, type ContentValue, type SchemaEntry, t
 import { entryLabel, schemaLabelField } from "@/lib/entries";
 import { queryKeys } from "@/lib/query";
 
+const EMPTY_OPTION = "__none__";
+
 export interface ReferenceSelectProps {
   field: SchemaField;
   value: ContentValue | null;
@@ -49,18 +51,22 @@ export function ReferenceSelect({
 
   return (
     <Select
-      value={typeof value === "number" ? String(value) : null}
-      onValueChange={(selected) => onChange(typeof selected === "string" ? Number(selected) : null)}
+      value={typeof value === "number" ? String(value) : field.required ? null : EMPTY_OPTION}
+      onValueChange={(selected) => onChange(selected === EMPTY_OPTION ? null : Number(selected))}
     >
-      <SelectTrigger disabled={disabled || entries.length === 0} aria-invalid={invalid}>
+      <SelectTrigger disabled={disabled || (field.required && entries.length === 0)} aria-invalid={invalid}>
         <SelectValue placeholder={entries.length === 0 ? "No entries to reference" : "Select an entry"}>
           {(selectedValue) => {
+            if (selectedValue === EMPTY_OPTION) {
+              return "[empty]";
+            }
             const selectedEntry = entries.find((entry) => String(entry.id) === selectedValue);
             return selectedEntry ? entryLabel(selectedEntry, labelFieldId) : null;
           }}
         </SelectValue>
       </SelectTrigger>
       <SelectContent>
+        {!field.required && <SelectItem value={EMPTY_OPTION}>[empty]</SelectItem>}
         {entries.map((entry) => (
           <SelectItem key={entry.id} value={String(entry.id)}>
             {entryLabel(entry, labelFieldId)}
