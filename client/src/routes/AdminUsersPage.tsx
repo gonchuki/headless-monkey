@@ -163,7 +163,7 @@ export default function AdminUsersPage() {
   const users = usersQuery.data ?? [];
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6">
       <div>
         <h1 className="font-heading text-xl font-semibold">Users</h1>
         <p className="text-sm text-muted-foreground">Manage editors. Admin login is configured via the server environment.</p>

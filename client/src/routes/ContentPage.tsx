@@ -85,7 +85,7 @@ export default function ContentPage() {
 
   if (schemaNotFound) {
     return (
-      <div className="mx-auto max-w-2xl space-y-4">
+      <div className="mx-auto max-w-3xl space-y-6">
         <div className="flex items-center gap-3">
           <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate("/content")}>
             <ArrowLeft className="size-4" aria-hidden="true" />
