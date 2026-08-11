@@ -3,6 +3,7 @@ import request from "supertest";
 import { openDatabase } from "../src/db/database";
 import { SchemaService } from "../src/services/schemaService";
 import { ContentService } from "../src/services/contentService";
+import { EventsEmitter, type RealtimeEvent } from "../src/services/events";
 import { createSchemasRouter } from "../src/routes/schemas";
 import express from "express";
 
@@ -680,6 +681,194 @@ describe("Schema Routes", () => {
         .prepare("SELECT schema_version FROM content WHERE id = ?")
         .get(carEntry.id) as { schema_version: number };
       expect(entry.schema_version).toBe(carEntry.schema_version);
+    });
+  });
+
+  describe("PATCH /api/schemas/:name preview (?preview=true)", () => {
+    function snapshot(db: ReturnType<typeof openDatabase>) {
+      return {
+        schemas: db.prepare("SELECT * FROM schemas").all(),
+        fields: db.prepare("SELECT * FROM schema_fields").all(),
+        content: db.prepare("SELECT * FROM content").all(),
+        rows: db.prepare("SELECT * FROM content_rows").all(),
+        refs: db.prepare("SELECT * FROM content_refs").all(),
+      };
+    }
+
+    it("returns 200 with the preview shape and leaves the DB untouched", async () => {
+      const { app, schemaService, db } = createTestApp();
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "year", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const yearId = schema.fields.find((f) => f.label === "year")!.id;
+
+      const now = new Date().toISOString();
+      const entryId = Number(
+        db.prepare(
+          `INSERT INTO content (schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by) VALUES (?, ?, ?, ?, ?, ?)`
+        ).run("car", 1, now, "editor1", now, "editor1").lastInsertRowid
+      );
+      db.prepare(`INSERT INTO content_rows (content_id, field_id, value) VALUES (?, ?, ?)`).run(entryId, makeId, '"Toyota"');
+      db.prepare(`INSERT INTO content_rows (content_id, field_id, value) VALUES (?, ?, ?)`).run(entryId, yearId, '"2020"');
+
+      const before = snapshot(db);
+
+      const res = await request(app)
+        .patch("/api/schemas/car?preview=true")
+        .send({
+          fields: [
+            { id: makeId, label: "make", type: "text", required: true },
+            { id: yearId, label: "year", type: "number", required: false },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        breaking: true,
+        version: 2,
+        compatVersion: 2,
+        affectedEntries: [
+          { id: entryId, label: "Toyota", affectedFieldIds: [yearId] },
+        ],
+      });
+      expect(snapshot(db)).toEqual(before);
+    });
+
+    it("the identical payload without the flag applies the change (regression)", async () => {
+      const { app, schemaService, db } = createTestApp();
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "year", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const yearId = schema.fields.find((f) => f.label === "year")!.id;
+
+      const res = await request(app)
+        .patch("/api/schemas/car")
+        .send({
+          fields: [
+            { id: makeId, label: "make", type: "text", required: true },
+            { id: yearId, label: "year", type: "number", required: false },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.version).toBe(2);
+      expect(res.body.compat_version).toBe(2);
+      const row = db
+        .prepare("SELECT type FROM schema_fields WHERE id = ?")
+        .get(yearId) as { type: string };
+      expect(row.type).toBe("number");
+    });
+
+    it("does not emit an SSE event; a real PATCH does", async () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const emitter = new EventsEmitter();
+      const events: RealtimeEvent[] = [];
+      emitter.subscribe(null, (event) => events.push(event));
+
+      const app = express();
+      app.use(express.json());
+      app.use((_req, _res, next) => {
+        (_req as any).user = { login: "editor1", role: "editor" };
+        next();
+      });
+      app.use("/api/schemas", createSchemasRouter(schemaService, emitter));
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+      const schema = schemaService.get("car")!;
+      const makeId = schema.fields[0].id;
+
+      const previewRes = await request(app)
+        .patch("/api/schemas/car?preview=true")
+        .send({ fields: [{ id: makeId, label: "make", type: "text", required: true }] });
+      expect(previewRes.status).toBe(200);
+      expect(events).toHaveLength(0);
+
+      await request(app)
+        .patch("/api/schemas/car")
+        .send({ fields: [{ id: makeId, label: "make", type: "text", required: true }] });
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe("schema.updated");
+    });
+
+    it("returns 404 for unknown schema", async () => {
+      const { app } = createTestApp();
+      const res = await request(app)
+        .patch("/api/schemas/nonexistent?preview=true")
+        .send({ fields: [{ label: "x", type: "text", required: true }] });
+      expect(res.status).toBe(404);
+    });
+
+    it.each([
+      ["zero fields", []],
+      [
+        "blank label",
+        [{ id: 1, label: "   ", type: "text", required: true }],
+      ],
+      [
+        "no required field",
+        [{ id: 1, label: "make", type: "text", required: false }],
+      ],
+      [
+        "duplicate label",
+        [
+          { id: 1, label: "x", type: "text", required: true },
+          { id: 2, label: "x", type: "text", required: false },
+        ],
+      ],
+    ])("rejects %s → 422 with the same status as a real PATCH", async (_desc, fields) => {
+      const { app, schemaService } = createTestApp();
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const previewRes = await request(app)
+        .patch("/api/schemas/car?preview=true")
+        .send({ fields });
+      expect(previewRes.status).toBe(422);
+
+      const patchRes = await request(app)
+        .patch("/api/schemas/car")
+        .send({ fields });
+      expect(patchRes.status).toBe(422);
+    });
+
+    it("rejects circular reference → 422 with the same status as a real PATCH", async () => {
+      const { app, schemaService } = createTestApp();
+      schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("car", [
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+
+      // Update person to reference car → cycle: person → car → person.
+      const fields = [
+        { id: 1, label: "name", type: "text", required: true },
+        { label: "my_car", type: "schema-ref", required: false, ref_schema: "car" },
+      ];
+
+      const previewRes = await request(app)
+        .patch("/api/schemas/person?preview=true")
+        .send({ fields });
+      expect(previewRes.status).toBe(422);
+
+      const patchRes = await request(app)
+        .patch("/api/schemas/person")
+        .send({ fields });
+      expect(patchRes.status).toBe(422);
     });
   });
 });

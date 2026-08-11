@@ -1,6 +1,10 @@
 import type { Db } from "../db/database";
 import { ContentRepository, ContentEntryRow } from "../repositories/contentRepo";
 import { SchemaRepository } from "../repositories/schemaRepo";
+import {
+  coerceScalarValue,
+  isScalarValueValid,
+} from "./fieldValidation";
 import type { FieldWithId, SchemaEntry } from "../types";
 
 export interface SchemaRefValue {
@@ -43,14 +47,6 @@ export class ContentServiceError extends Error {
   ) {
     super(message);
   }
-}
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isValidDateString(value: string): boolean {
-  if (!DATE_RE.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 interface BuiltEntryValues {
@@ -282,33 +278,20 @@ export class ContentService {
   }
 
   private isValidValue(field: FieldWithId, value: unknown): boolean {
-    switch (field.type) {
-      case "text":
-        return typeof value === "string" && (!field.required || value.length > 0);
-      case "number":
-        return typeof value === "number" && Number.isFinite(value);
-      case "boolean":
-        return typeof value === "boolean";
-      case "date":
-        return typeof value === "string" && isValidDateString(value);
-      case "schema-ref":
-        return (
-          typeof value === "number" &&
-          Number.isInteger(value) &&
-          value > 0 &&
-          !!field.ref_schema &&
-          this.repo.entryExistsInSchema(value, field.ref_schema)
-        );
-      default:
-        return false;
+    if (field.type === "schema-ref") {
+      return (
+        typeof value === "number" &&
+        Number.isInteger(value) &&
+        value > 0 &&
+        !!field.ref_schema &&
+        this.repo.entryExistsInSchema(value, field.ref_schema)
+      );
     }
+    return isScalarValueValid(field.type, field.required, value);
   }
 
   private coerce(field: FieldWithId, value: unknown): unknown {
-    if (field.type === "text" && typeof value === "number") {
-      return String(value);
-    }
-    return null;
+    return coerceScalarValue(field.type, value);
   }
 
   private toEntry(

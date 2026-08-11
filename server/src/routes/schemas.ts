@@ -76,6 +76,15 @@ export function createSchemasRouter(
       const name = typeof req.params.name === "string" ? req.params.name : "";
       const fields = req.body.fields;
       const user = (req as AuthRequest).user.login;
+
+      // Dry-run preview: same route, same payload, gated by a query flag, so
+      // it reflects exactly what a real PATCH would do — including the same
+      // 404/422 outcomes. No write, no SSE event.
+      if (req.query.preview === "true") {
+        const preview = schemaService.previewUpdate(name, fields);
+        return res.json(preview);
+      }
+
       const existing = schemaService.get(name);
       const schema = schemaService.update(name, fields, user);
       if (emitter && existing) {
