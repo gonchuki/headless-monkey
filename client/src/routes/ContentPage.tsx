@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { ArrowLeft, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { Skeleton } from "@/components/shared/Skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -33,13 +34,25 @@ function errorMessage(error: unknown): string | undefined {
 export default function ContentPage() {
   const navigate = useNavigate();
   const { schema: schemaParam } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { listQuery: schemasQuery } = useSchemas();
   const [entryToDelete, setEntryToDelete] = useState<ContentListEntry | null>(null);
 
   const schemas = schemasQuery.data ?? [];
   const selected = schemaParam ?? null;
   const allView = selected == null;
-  const listUrl = allView ? "/content" : `/content/${encodeURIComponent(selected)}`;
+  const conflictedOnly = searchParams.get("conflicted") === "1";
+
+  // Every navigation target in this page must round-trip the filter through
+  // `?conflicted=1` so the list survives schema switches, the editor return
+  // flow (`state.list`), and the schema-not-found back button.
+  function withConflicted(path: string): string {
+    return conflictedOnly ? `${path}?conflicted=1` : path;
+  }
+
+  const listUrl = withConflicted(
+    allView ? "/content" : `/content/${encodeURIComponent(selected)}`,
+  );
 
   // The delete mutation is always keyed to the deleted entry's own schema so
   // the All view's merged list (per-schema queries) observes its optimistic
@@ -53,6 +66,7 @@ export default function ContentPage() {
   const allEntriesQuery = useAllEntries(allView ? schemas.map((schema) => schema.name) : []);
   const entriesQuery = allView ? allEntriesQuery : filtered.listQuery;
   const entries = entriesQuery.data ?? [];
+  const visibleEntries = conflictedOnly ? entries.filter((entry) => entry.conflict) : entries;
 
   const labelFieldIds = new Map(schemas.map((schema) => [schema.name, schemaLabelField(schema)]));
   const schemaNotFound =
@@ -87,7 +101,7 @@ export default function ContentPage() {
     return (
       <div className="mx-auto max-w-3xl space-y-6">
         <div className="flex items-center gap-3">
-          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate("/content")}>
+          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate(withConflicted("/content"))}>
             <ArrowLeft className="size-4" aria-hidden="true" />
           </Button>
           <h1 className="font-heading text-xl font-semibold">Schema not found</h1>
@@ -150,9 +164,9 @@ export default function ContentPage() {
             onValueChange={(value) => {
               if (value == null) return;
               if (value === ALL_SCHEMAS_VALUE) {
-                navigate("/content");
+                navigate(withConflicted("/content"));
               } else {
-                navigate(`/content/${encodeURIComponent(value)}`);
+                navigate(withConflicted(`/content/${encodeURIComponent(value)}`));
               }
             }}
           >
@@ -190,6 +204,18 @@ export default function ContentPage() {
               ))}
             </SelectContent>
           </Select>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="conflicted-only"
+              checked={conflictedOnly}
+              onCheckedChange={(checked) =>
+                checked ? setSearchParams({ conflicted: "1" }) : setSearchParams({})
+              }
+            />
+            <Label htmlFor="conflicted-only" className="cursor-pointer font-normal">
+              Show conflicted only
+            </Label>
+          </div>
         </div>
       )}
 
@@ -220,9 +246,18 @@ export default function ContentPage() {
         </Alert>
       )}
 
-      {schemas.length > 0 && entriesQuery.isSuccess && entries.length > 0 && (
+      {schemas.length > 0 && entriesQuery.isSuccess && entries.length > 0 && conflictedOnly && visibleEntries.length === 0 && (
+        <Alert>
+          <AlertTitle>No conflicted entries</AlertTitle>
+          <AlertDescription>
+            {allView ? "No entries are conflicted across all schemas." : "No entries are conflicted in this schema."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {schemas.length > 0 && entriesQuery.isSuccess && visibleEntries.length > 0 && (
         <ul className="divide-y overflow-hidden rounded-xl border bg-card">
-          {entries.map((entry) => {
+          {visibleEntries.map((entry) => {
             const entryDeleted = deletedSchemas.has(entry.schema);
             const labelFieldId = labelFieldIds.get(entry.schema) ?? null;
             return (
