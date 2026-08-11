@@ -278,9 +278,9 @@ export default function ContentPage() {
               Delete {entryToDelete.conflict ? "this conflicted" : "this"} entry from{" "}
               <span className="font-medium text-foreground">{entryToDelete.schema}</span>? This cannot be undone.
               {entryToDelete.referencer_count > 0 && (
-                <span className="mt-2 block text-sm text-destructive">
+                <span className="mt-2 block text-sm text-amber-700 dark:text-amber-400">
                   This entry is referenced by {entryToDelete.referencer_count}{" "}
-                  {entryToDelete.referencer_count === 1 ? "other entry" : "other entries"} and cannot be deleted.
+                  {entryToDelete.referencer_count === 1 ? "other entry" : "other entries"}. Deleting will clear those references.
                 </span>
               )}
             </>

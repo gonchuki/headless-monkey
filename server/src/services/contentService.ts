@@ -61,10 +61,12 @@ interface BuiltEntryValues {
 }
 
 export class ContentService {
+  private db: Db;
   private repo: ContentRepository;
   private schemaRepo: SchemaRepository;
 
   constructor(db: Db) {
+    this.db = db;
     this.repo = new ContentRepository(db);
     this.schemaRepo = new SchemaRepository(db);
   }
@@ -112,18 +114,13 @@ export class ContentService {
     if (!existing) {
       throw new ContentServiceError(404, `Entry ${entryId} not found`);
     }
-    // R34: an entry referenced by any other entry's schema-ref cannot be
-    // deleted. The count is the distinct-referencing-entry count (one entry
-    // with two refs to this target still counts as one).
-    const referencerCount = this.repo.countReferencesTo(entryId);
-    if (referencerCount > 0) {
-      throw new ContentServiceError(
-        409,
-        `Cannot delete entry ${entryId}: referenced by ${referencerCount} other ${referencerCount === 1 ? "entry" : "entries"}`,
-        { referencerCount }
-      );
-    }
-    this.repo.delete(entryId);
+    // R34 (updated): clear all content_refs pointing at the target before
+    // removing the entry itself. Both operations are wrapped in a single
+    // transaction so either both succeed or neither does.
+    this.db.transaction(() => {
+      this.repo.clearReferencesTo(entryId);
+      this.repo.delete(entryId);
+    })();
   }
 
   getEntryMeta(entryId: number): { id: number; schema: string } | null {

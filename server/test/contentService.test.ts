@@ -503,8 +503,8 @@ describe("ContentService", () => {
       return undefined;
     }
 
-    it("409 naming the referencer count when two entries reference a target", () => {
-      const { schemaService, contentService } = setup();
+    it("clears refs and deletes when two entries reference a target", () => {
+      const { db, schemaService, contentService } = setup();
       const car = makePersonCar(schemaService);
       const makeField = car.fields.find((f) => f.label === "make")!;
       const ownerField = car.fields.find((f) => f.label === "owner")!;
@@ -521,32 +521,29 @@ describe("ContentService", () => {
         "editor1"
       );
 
-      const err = deleteError(contentService, person.id);
-      expect(err).toBeDefined();
-      expect(err!.statusCode).toBe(409);
-      expect(err!.message).toContain("2");
-      // The blocked attempt leaves the target entry intact.
-      expect(contentService.getEntryMeta(person.id)).toEqual({ id: person.id, schema: "person" });
+      // No error — delete succeeds and clears the refs.
+      expect(deleteError(contentService, person.id)).toBeUndefined();
+      const contentRow = db.prepare("SELECT 1 FROM content WHERE id = ?").get(person.id);
+      expect(contentRow).toBeUndefined();
     });
 
-    it("409 for an entry referenced from a different schema (cross-schema refs)", () => {
-      const { schemaService, contentService } = setup();
+    it("clears cross-schema refs on delete", () => {
+      const { db, schemaService, contentService } = setup();
       const car = makePersonCar(schemaService);
       const makeField = car.fields.find((f) => f.label === "make")!;
       const ownerField = car.fields.find((f) => f.label === "owner")!;
 
       const person = contentService.create("person", { "1": "Alice" }, "editor1");
-      const carEntry = contentService.create(
+      contentService.create(
         "car",
         { [String(makeField.id)]: "Civic", [String(ownerField.id)]: person.id },
         "editor1"
       );
-      expect(carEntry.schema).toBe("car");
-      expect(person.schema).toBe("person");
 
-      const err = deleteError(contentService, person.id);
-      expect(err).toBeDefined();
-      expect(err!.statusCode).toBe(409);
+      // No error — delete succeeds and clears the ref.
+      expect(deleteError(contentService, person.id)).toBeUndefined();
+      const contentRow = db.prepare("SELECT 1 FROM content WHERE id = ?").get(person.id);
+      expect(contentRow).toBeUndefined();
     });
 
     it("deleting an unreferenced entry succeeds", () => {
@@ -558,8 +555,8 @@ describe("ContentService", () => {
       expect(contentService.getEntryMeta(person.id)).toBeNull();
     });
 
-    it("counts one entry with two schema-ref fields to the same target as one referencer (distinct entries)", () => {
-      const { schemaService, contentService } = setup();
+    it("clears refs when one entry with two schema-ref fields targets the same entry", () => {
+      const { db, schemaService, contentService } = setup();
       makeSchema(schemaService, "person", [
         { label: "name", type: "text", required: true },
       ]);
@@ -583,11 +580,10 @@ describe("ContentService", () => {
         "editor1"
       );
 
-      const err = deleteError(contentService, person.id);
-      expect(err).toBeDefined();
-      expect(err!.statusCode).toBe(409);
-      expect(err!.message).toContain("1");
-      expect(err!.message).not.toContain("2");
+      // No error — delete succeeds and clears both ref rows.
+      expect(deleteError(contentService, person.id)).toBeUndefined();
+      const contentRow = db.prepare("SELECT 1 FROM content WHERE id = ?").get(person.id);
+      expect(contentRow).toBeUndefined();
     });
 
     it("exposes referencer_count on the editor list shape (distinct referencing entries)", () => {
