@@ -51,6 +51,19 @@ export interface SchemaEntryRow {
   conflict: boolean;
 }
 
+export interface SchemaUpdatePreviewEntry {
+  id: number;
+  label: string; // first-required-field value (by sort_order), else "Entry #<id>"
+  affectedFieldIds: number[];
+}
+
+export interface SchemaUpdatePreview {
+  breaking: boolean;
+  version: number;
+  compatVersion: number;
+  affectedEntries: SchemaUpdatePreviewEntry[];
+}
+
 export type ContentValue = string | number | boolean;
 
 export interface ContentEntry {

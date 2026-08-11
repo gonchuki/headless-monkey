@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch, type FieldType, type SchemaEntry, type SchemaEntryRow } from "@/lib/api";
+import {
+  apiFetch,
+  type FieldType,
+  type SchemaEntry,
+  type SchemaEntryRow,
+  type SchemaFieldInput,
+  type SchemaUpdatePreview,
+} from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 
 export interface SchemaDraft {
@@ -87,5 +94,17 @@ export function useSchemaEntryCount(schemaName: string, enabled: boolean) {
     queryFn: () => apiFetch<SchemaEntryRow[]>(`/api/schemas/${encodeURIComponent(schemaName)}/entries`),
     enabled,
     select: (rows) => rows.length,
+  });
+}
+
+export function useSchemaPatchPreview(name: string, fields: SchemaFieldInput[], enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.schemaPreview(name, JSON.stringify(fields)),
+    queryFn: () =>
+      apiFetch<SchemaUpdatePreview>(`/api/schemas/${encodeURIComponent(name)}?preview=true`, {
+        method: "PATCH",
+        body: JSON.stringify({ fields }),
+      }),
+    enabled,
   });
 }
