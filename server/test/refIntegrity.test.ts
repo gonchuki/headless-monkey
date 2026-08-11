@@ -309,38 +309,36 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       expect(civic.status).toBe(201);
       expect(accord.status).toBe(201);
 
-      // R34: deleting the referenced target is blocked with 409 naming the count.
-      const blocked = await request(app)
+      // R34 (updated): deleting the referenced target now succeeds (204) and
+      // clears all content_refs pointing at it.
+      const delAlice = await request(app)
         .delete(`/api/entries/${alice.body.id}`)
         .set("Authorization", `Bearer ${token}`);
-      expect(blocked.status).toBe(409);
-      expect(blocked.body.error).toContain("2");
+      expect(delAlice.status).toBe(204);
 
-      // The blocked attempt leaves the reference present and still resolving.
-      const afterBlock = await expectPublicReadClean(app, db, schemaService, "car");
-      expect(afterBlock.map((e) => e.id)).toEqual([civic.body.id, accord.body.id]);
-      for (const entry of afterBlock) {
-        expect(entry.values[String(ownerField.id)]).toEqual({ id: alice.body.id, schema: "person" });
+      // The car entries remain but their refs are cleared — no dangling values.
+      const afterDelete = await expectPublicReadClean(app, db, schemaService, "car");
+      expect(afterDelete.map((e) => e.id)).toEqual([civic.body.id, accord.body.id]);
+      for (const entry of afterDelete) {
+        // The ref is absent since clearing refs removed it on Alice's deletion.
+        expect(entry.values).not.toHaveProperty(String(ownerField.id));
       }
-      const personAfterBlock = await request(app).get("/api/content/person");
-      expect(personAfterBlock.status).toBe(200);
-      expect(personAfterBlock.body.entries.map((e: { id: number }) => e.id)).toEqual([alice.body.id]);
 
-      // Delete the referencing car entries; Alice's delete then succeeds.
+      const personAfter = await request(app).get("/api/content/person");
+      expect(personAfter.status).toBe(200);
+      expect(personAfter.body.entries.map((e: { id: number }) => e.id)).toEqual([]);
+
+      // Delete the referencing car entries; Alice's delete already succeeded.
       for (const entry of [civic, accord]) {
         const del = await request(app)
           .delete(`/api/entries/${entry.body.id}`)
           .set("Authorization", `Bearer ${token}`);
         expect(del.status).toBe(204);
       }
-      const delAlice = await request(app)
-        .delete(`/api/entries/${alice.body.id}`)
-        .set("Authorization", `Bearer ${token}`);
-      expect(delAlice.status).toBe(204);
 
       // Public read: both car entries are gone, and no refs dangle anywhere.
-      const afterDelete = await expectPublicReadClean(app, db, schemaService, "car");
-      expect(afterDelete).toEqual([]);
+      const afterAllDelete = await expectPublicReadClean(app, db, schemaService, "car");
+      expect(afterAllDelete).toEqual([]);
       const persons = await request(app).get("/api/content/person");
       expect(persons.status).toBe(200);
       expect(persons.body.entries).toEqual([]);
@@ -524,11 +522,11 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       expect(alice.status).toBe(201);
       expect(civic.status).toBe(201);
 
-      // Case A: would-be dangle #1 — the target was "deleted".
-      const blocked = await request(app)
+      // Case A: would-be dangle #1 — the target is now deleted (204, refs cleared).
+      const delAlice = await request(app)
         .delete(`/api/entries/${alice.body.id}`)
         .set("Authorization", `Bearer ${token}`);
-      expect(blocked.status).toBe(409);
+      expect(delAlice.status).toBe(204);
 
       // Case B: would-be dangle #2 — the ref's schema changed (R35 purge + 422).
       const retarget = await request(app)

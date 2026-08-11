@@ -389,11 +389,10 @@ describe("Public content API (R18-R20)", () => {
         });
       expect(carRes.status).toBe(201);
 
-      const blocked = await request(app)
+      const del = await request(app)
         .delete(`/api/entries/${personRes.body.id}`)
         .set("Authorization", `Bearer ${token}`);
-      expect(blocked.status).toBe(409);
-      expect(blocked.body.error).toContain("1");
+      expect(del.status).toBe(204);
 
       const ok = await request(app)
         .delete(`/api/entries/${carRes.body.id}`)

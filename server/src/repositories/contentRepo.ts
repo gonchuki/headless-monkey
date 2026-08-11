@@ -107,6 +107,12 @@ export class ContentRepository {
     tx();
   }
 
+  clearReferencesTo(targetContentId: number): void {
+    this.db
+      .prepare("DELETE FROM content_refs WHERE target_content_id = ?")
+      .run(targetContentId);
+  }
+
   delete(id: number): void {
     this.db.prepare("DELETE FROM content WHERE id = ?").run(id);
   }

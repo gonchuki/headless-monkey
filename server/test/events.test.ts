@@ -264,23 +264,17 @@ describe("GET /api/events", () => {
       expect(carRes.status).toBe(201);
       const carId = carRes.body.id as number;
 
-      // Blocked delete: the service throws 409 before the route reaches the emit.
-      const blocked = await request(app)
+      // Deleting the referenced entry now succeeds (204) and emits the event.
+      const delPerson = await request(app)
         .delete(`/api/entries/${personId}`)
         .set("Authorization", `Bearer ${token}`);
-      expect(blocked.status).toBe(409);
+      expect(delPerson.status).toBe(204);
+      await waitForEvent(
+        events,
+        (e) => e.type === "entry.deleted" && e.entryId === personId
+      );
 
-      // Negative assertion: no entry.deleted for the referenced entry within a bounded wait.
-      const deadline = Date.now() + 300;
-      while (Date.now() < deadline) {
-        if (events.some((e) => e.type === "entry.deleted" && e.entryId === personId)) {
-          throw new Error("blocked delete must not emit entry.deleted");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-
-      // Positive control: an unreferenced delete does emit the event, proving
-      // the subscription works so the negative assertion is meaningful.
+      // Positive control: an unreferenced delete still emits the event.
       const del = await request(app)
         .delete(`/api/entries/${carId}`)
         .set("Authorization", `Bearer ${token}`);
