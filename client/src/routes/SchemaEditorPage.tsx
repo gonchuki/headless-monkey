@@ -5,13 +5,19 @@ import { ArrowLeft } from "@phosphor-icons/react";
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { PageSkeleton } from "@/components/shared/PageSkeleton";
 import { SchemaFieldGrid } from "@/components/SchemaFieldGrid";
+import { SchemaSaveConfirmDialog } from "@/components/SchemaSaveConfirmDialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/toast";
 import { useRealtime } from "@/hooks/useRealtime";
-import { useSchemaEntryCount, useSchemas, type SchemaDraft } from "@/hooks/useSchemas";
+import {
+  useSchemaEntryCount,
+  useSchemaPatchPreview,
+  useSchemas,
+  type SchemaDraft,
+} from "@/hooks/useSchemas";
 import { apiFetch, type SchemaEntry, type SchemaFieldInput } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 
@@ -113,6 +119,7 @@ export default function SchemaEditorPage() {
   const { listQuery, create, update } = useSchemas();
   const [state, dispatch] = useReducer(editorReducer, initialState);
   const [fieldToDelete, setFieldToDelete] = useState<number | null>(null);
+  const [pendingSave, setPendingSave] = useState<{ fields: SchemaFieldInput[] } | null>(null);
 
   // Live stream: only schema events affect the schema editor view.
   const { deletedSchemas } = useRealtime({
@@ -140,6 +147,35 @@ export default function SchemaEditorPage() {
       });
     }
   }, [schemaQuery.isSuccess, schemaQuery.data, state.loadedName, name]);
+
+  const previewQuery = useSchemaPatchPreview(
+    state.name,
+    pendingSave?.fields ?? [],
+    pendingSave != null && !deleted,
+  );
+
+  // Auto-proceed: a non-breaking change applies immediately after the preview resolves.
+  // Guarded on `pendingSave` still being set so the effect is idempotent.
+  useEffect(() => {
+    if (
+      pendingSave != null &&
+      !deleted &&
+      previewQuery.isSuccess &&
+      previewQuery.data?.breaking === false
+    ) {
+      const { fields } = pendingSave;
+      setPendingSave(null);
+      update.mutate(
+        { name: state.name, fields },
+        {
+          onSuccess: (schema) => {
+            toast.add({ type: "success", title: "Schema saved", description: `Version ${schema.version}` });
+            navigate("/schemas", { replace: true });
+          },
+        },
+      );
+    }
+  }, [pendingSave, deleted, previewQuery.isSuccess, previewQuery.data, state.name, update, navigate]);
 
   const refSchemas = (listQuery.data ?? [])
     .map((schema) => schema.name)
@@ -188,16 +224,28 @@ export default function SchemaEditorPage() {
         },
       );
     } else {
-      update.mutate(
-        { name: state.name, fields },
-        {
-          onSuccess: (schema) => {
-            toast.add({ type: "success", title: "Schema saved", description: `Version ${schema.version}` });
-            navigate("/schemas", { replace: true });
-          },
-        },
-      );
+      setPendingSave({ fields });
     }
+  }
+
+  function handleSaveConfirm() {
+    if (pendingSave == null || deleted) return;
+    const breakingAtConfirm = previewQuery.data?.breaking ?? false;
+    const { fields } = pendingSave;
+    setPendingSave(null);
+    update.mutate(
+      { name: state.name, fields },
+      {
+        onSuccess: (schema) => {
+          toast.add({ type: "success", title: "Schema saved", description: `Version ${schema.version}` });
+          if (breakingAtConfirm) {
+            navigate(`/content/${encodeURIComponent(state.name)}?conflicted=1`, { replace: true });
+          } else {
+            navigate("/schemas", { replace: true });
+          }
+        },
+      },
+    );
   }
 
   if (!isCreateRoute && schemaQuery.isPending) {
@@ -327,6 +375,21 @@ export default function SchemaEditorPage() {
           }
           setFieldToDelete(null);
         }}
+      />
+
+      <SchemaSaveConfirmDialog
+        open={pendingSave != null}
+        onOpenChange={(open) => {
+          if (!open) setPendingSave(null);
+        }}
+        schemaName={state.name}
+        previewPending={pendingSave != null && (previewQuery.isPending || previewQuery.isFetching)}
+        previewError={pendingSave != null ? (errorMessage(previewQuery.error) ?? null) : null}
+        affectedCount={previewQuery.data?.affectedEntries.length ?? null}
+        affectedEntries={previewQuery.data?.affectedEntries ?? null}
+        savePending={update.isPending}
+        saveError={errorMessage(update.error) ?? null}
+        onConfirm={handleSaveConfirm}
       />
     </div>
   );
