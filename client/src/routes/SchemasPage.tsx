@@ -42,7 +42,7 @@ export default function SchemasPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="font-heading text-xl font-semibold">Schemas</h1>

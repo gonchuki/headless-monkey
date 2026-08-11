@@ -206,7 +206,7 @@ export default function SchemaEditorPage() {
 
   if (schemaMissing) {
     return (
-      <div className="mx-auto max-w-2xl space-y-4">
+      <div className="mx-auto max-w-3xl space-y-6">
         <div className="flex items-center gap-3">
           <Button type="button" variant="ghost" size="icon" aria-label="Back to schemas" onClick={() => navigate("/schemas")}>
             <ArrowLeft className="size-4" aria-hidden="true" />
@@ -230,7 +230,7 @@ export default function SchemaEditorPage() {
     deleted;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Button type="button" variant="ghost" size="icon" aria-label="Back to schemas" onClick={() => navigate("/schemas")}>
