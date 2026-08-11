@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useLayoutEffect, useReducer, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "@phosphor-icons/react";
@@ -155,8 +155,10 @@ export default function SchemaEditorPage() {
   );
 
   // Auto-proceed: a non-breaking change applies immediately after the preview resolves.
+  // `useLayoutEffect` closes the dialog before the browser paints, so the resolved
+  // dialog state ("This will affect 0 entries.") never renders for a non-breaking save.
   // Guarded on `pendingSave` still being set so the effect is idempotent.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       pendingSave != null &&
       !deleted &&
