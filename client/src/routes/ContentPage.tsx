@@ -24,7 +24,7 @@ import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
 import { SchemaBadge } from "@/components/shared/SchemaBadge";
 
-const ALL_SCHEMAS_VALUE = "all";
+const ALL_SCHEMAS_VALUE = "__all__";
 
 function errorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
@@ -157,10 +157,31 @@ export default function ContentPage() {
             }}
           >
             <SelectTrigger id="content-schema">
-              <SelectValue />
+              <SelectValue>
+                {(value) => {
+                  if (!value || value === ALL_SCHEMAS_VALUE) {
+                    return (
+                      <>
+                        <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
+                        All schemas
+                      </>
+                    )
+                  }
+
+                  return (
+                    <>
+                      <SchemaBadge bgcolor={schemaColor(value).background} />
+                      {value}
+                    </>
+                  )
+                }}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL_SCHEMAS_VALUE}>All schemas</SelectItem>
+              <SelectItem value={ALL_SCHEMAS_VALUE}>
+                <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
+                All schemas
+              </SelectItem>
               {schemas.map((schema) => (
                 <SelectItem key={schema.name} value={schema.name}>
                   <SchemaBadge bgcolor={schemaColor(schema.name).background} className="self-center" />
