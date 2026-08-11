@@ -39,3 +39,16 @@ export interface SchemaListEntry {
   field_count: number;
   entry_count: number;
 }
+
+export interface SchemaUpdatePreviewEntry {
+  id: number;
+  label: string; // first-required-field value by sort_order (listing convention), else `Entry #<id>`
+  affectedFieldIds: number[];
+}
+
+export interface SchemaUpdatePreview {
+  breaking: boolean;
+  version: number;        // the version the PATCH would produce
+  compatVersion: number;  // the compat_version the PATCH would produce
+  affectedEntries: SchemaUpdatePreviewEntry[];
+}

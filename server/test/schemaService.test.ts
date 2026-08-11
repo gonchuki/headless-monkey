@@ -972,6 +972,416 @@ describe("SchemaService", () => {
     });
   });
 
+  describe("previewUpdate", () => {
+    function insertEntry(
+      db: ReturnType<typeof openDatabase>,
+      schemaName: string,
+      schemaVersion = 1
+    ): number {
+      return Number(
+        db
+          .prepare(
+            `INSERT INTO content (schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by) VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            schemaName,
+            schemaVersion,
+            new Date().toISOString(),
+            "editor1",
+            new Date().toISOString(),
+            "editor1"
+          ).lastInsertRowid
+      );
+    }
+
+    function insertRow(
+      db: ReturnType<typeof openDatabase>,
+      contentId: number,
+      fieldId: number,
+      value: string
+    ): void {
+      db.prepare(
+        `INSERT INTO content_rows (content_id, field_id, value) VALUES (?, ?, ?)`
+      ).run(contentId, fieldId, value);
+    }
+
+    function snapshot(db: ReturnType<typeof openDatabase>) {
+      return {
+        schemas: db.prepare("SELECT * FROM schemas").all(),
+        fields: db.prepare("SELECT * FROM schema_fields").all(),
+        content: db.prepare("SELECT * FROM content").all(),
+        rows: db.prepare("SELECT * FROM content_rows").all(),
+        refs: db.prepare("SELECT * FROM content_refs").all(),
+      };
+    }
+
+    it("text→number flags only entries with a stored value and reports the would-be version", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "year", type: "text", required: false },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const yearId = schema.fields.find((f) => f.label === "year")!.id;
+
+      const e1 = insertEntry(db, "car");
+      const e2 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+      insertRow(db, e1, yearId, '"2020"');
+      insertRow(db, e2, makeId, '"Honda"');
+
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { id: yearId, label: "year", type: "number", required: false },
+      ]);
+
+      expect(preview).toEqual({
+        breaking: true,
+        version: 2,
+        compatVersion: 2,
+        affectedEntries: [
+          { id: e1, label: "Toyota", affectedFieldIds: [yearId] },
+        ],
+      });
+    });
+
+    it("number→text flags no entries and is non-breaking", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "year", type: "number", required: false },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const yearId = schema.fields.find((f) => f.label === "year")!.id;
+
+      const e1 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+      insertRow(db, e1, yearId, "2020");
+
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { id: yearId, label: "year", type: "text", required: false },
+      ]);
+
+      expect(preview.breaking).toBe(false);
+      expect(preview.version).toBe(2);
+      expect(preview.compatVersion).toBe(1);
+      expect(preview.affectedEntries).toHaveLength(0);
+    });
+
+    it("optional→required flags only entries that cannot satisfy the field anymore", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const colorId = schema.fields.find((f) => f.label === "color")!.id;
+
+      const e1 = insertEntry(db, "car");
+      const e2 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+      insertRow(db, e1, colorId, '"Red"');
+      insertRow(db, e2, makeId, '"Honda"');
+
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { id: colorId, label: "color", type: "text", required: true },
+      ]);
+
+      expect(preview.breaking).toBe(true);
+      expect(preview.affectedEntries).toEqual([
+        { id: e2, label: "Honda", affectedFieldIds: [colorId] },
+      ]);
+    });
+
+    it("optional→required flags an entry storing an empty string for the field", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const colorId = schema.fields.find((f) => f.label === "color")!.id;
+
+      const e1 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+      insertRow(db, e1, colorId, '""');
+
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { id: colorId, label: "color", type: "text", required: true },
+      ]);
+
+      expect(preview.affectedEntries).toEqual([
+        { id: e1, label: "Toyota", affectedFieldIds: [colorId] },
+      ]);
+    });
+
+    it("new required field flags every entry (no field id to report yet)", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+
+      const e1 = insertEntry(db, "car");
+      const e2 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+      insertRow(db, e2, makeId, '"Honda"');
+
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { label: "vin", type: "text", required: true },
+      ]);
+
+      expect(preview.breaking).toBe(true);
+      expect(preview.affectedEntries).toEqual([
+        { id: e1, label: "Toyota", affectedFieldIds: [] },
+        { id: e2, label: "Honda", affectedFieldIds: [] },
+      ]);
+    });
+
+    it("new optional field flags nothing", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+
+      const e1 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ]);
+
+      expect(preview.breaking).toBe(false);
+      expect(preview.affectedEntries).toHaveLength(0);
+    });
+
+    it("ref retarget flags only entries holding a ref for the field", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("company", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ], "editor1");
+
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const personNameField = person.fields[0];
+
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+      const withOwner = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+      const withoutOwner = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Accord" },
+        "editor1"
+      );
+
+      const preview = schemaService.previewUpdate("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+      ]);
+
+      expect(preview.breaking).toBe(true);
+      expect(preview.affectedEntries).toEqual([
+        { id: withOwner.id, label: "Civic", affectedFieldIds: [ownerField.id] },
+      ]);
+      expect(preview.affectedEntries.find((e) => e.id === withoutOwner.id)).toBeUndefined();
+    });
+
+    it("deleted field flags only entries that stored the value", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const colorId = schema.fields.find((f) => f.label === "color")!.id;
+
+      const e1 = insertEntry(db, "car");
+      const e2 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+      insertRow(db, e1, colorId, '"Red"');
+      insertRow(db, e2, makeId, '"Honda"');
+
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+      ]);
+
+      expect(preview.breaking).toBe(true);
+      expect(preview.affectedEntries).toEqual([
+        { id: e1, label: "Toyota", affectedFieldIds: [colorId] },
+      ]);
+    });
+
+    it("flags entries whose only stored value is stale (row or ref) for the field", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ], "editor1");
+
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const personNameField = person.fields[0];
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+
+      // Entry A: holds a ref. Flip schema-ref → text: the ref row survives.
+      const entryWithRef = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: ownerField.id, label: "owner", type: "text", required: false },
+      ], "editor1");
+
+      // Entry B: holds a text row. Flip text → schema-ref: the row survives.
+      const entryWithRow = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Accord", [String(ownerField.id)]: "Bob" },
+        "editor1"
+      );
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ], "editor1");
+
+      // Preview a schema-ref → text flip: both entries are disturbed — A via
+      // its stale ref, B via its stale row. Reading only one table would miss
+      // one of them.
+      const preview = schemaService.previewUpdate("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: ownerField.id, label: "owner", type: "text", required: false },
+      ]);
+
+      expect(preview.breaking).toBe(true);
+      expect(preview.affectedEntries).toHaveLength(2);
+      const byId = new Map(preview.affectedEntries.map((e) => [e.id, e]));
+      expect(byId.get(entryWithRef.id)!.affectedFieldIds).toEqual([ownerField.id]);
+      expect(byId.get(entryWithRow.id)!.affectedFieldIds).toEqual([ownerField.id]);
+    });
+
+    it("labels use the first required field value, falling back to Entry #id", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const colorId = schema.fields.find((f) => f.label === "color")!.id;
+
+      // e2 has no stored value for the required label field (raw SQL only).
+      const e1 = insertEntry(db, "car");
+      const e2 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+      insertRow(db, e1, colorId, '"Red"');
+      insertRow(db, e2, colorId, '"Blue"');
+
+      // A new required field flags both entries, forcing the label computation.
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { id: colorId, label: "color", type: "text", required: false },
+        { label: "vin", type: "text", required: true },
+      ]);
+
+      const byId = new Map(preview.affectedEntries.map((e) => [e.id, e]));
+      expect(byId.get(e1)!.label).toBe("Toyota");
+      expect(byId.get(e2)!.label).toBe(`Entry #${e2}`);
+    });
+
+    it("writes nothing and a follow-up real update still applies the change", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "year", type: "text", required: false },
+      ], "editor1");
+
+      const schema = service.get("car")!;
+      const makeId = schema.fields.find((f) => f.label === "make")!.id;
+      const yearId = schema.fields.find((f) => f.label === "year")!.id;
+
+      const e1 = insertEntry(db, "car");
+      insertRow(db, e1, makeId, '"Toyota"');
+      insertRow(db, e1, yearId, '"2020"');
+
+      const before = snapshot(db);
+      const preview = service.previewUpdate("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { id: yearId, label: "year", type: "number", required: false },
+      ]);
+      expect(preview.affectedEntries).toHaveLength(1);
+      expect(snapshot(db)).toEqual(before);
+
+      // A follow-up real update applies cleanly on top of the untouched DB.
+      const updated = service.update("car", [
+        { id: makeId, label: "make", type: "text", required: true },
+        { id: yearId, label: "year", type: "number", required: false },
+      ], "editor1");
+      expect(updated.version).toBe(2);
+      expect(updated.compat_version).toBe(2);
+      expect(
+        db.prepare("SELECT type FROM schema_fields WHERE id = ?").get(yearId)
+      ).toEqual({ type: "number" });
+    });
+  });
+
   describe("get and list", () => {
     it("returns null for non-existent schema", () => {
       const service = createService();

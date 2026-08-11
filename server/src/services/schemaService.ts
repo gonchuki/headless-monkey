@@ -1,6 +1,14 @@
 import type { Db } from "../db/database";
+import { ContentRepository, ContentEntryRow } from "../repositories/contentRepo";
 import { SchemaRepository } from "../repositories/schemaRepo";
-import type { FieldInput, FieldWithId, FieldType, SchemaEntry } from "../types";
+import type {
+  FieldInput,
+  FieldWithId,
+  FieldType,
+  SchemaEntry,
+  SchemaUpdatePreview,
+  SchemaUpdatePreviewEntry,
+} from "../types";
 
 const VALID_TYPES: Set<FieldType> = new Set([
   "text",
@@ -22,11 +30,13 @@ export class SchemaServiceError extends Error {
 
 export class SchemaService {
   private repo: SchemaRepository;
+  private contentRepo: ContentRepository;
   private db: Db;
 
   constructor(db: Db) {
     this.db = db;
     this.repo = new SchemaRepository(db);
+    this.contentRepo = new ContentRepository(db);
   }
 
   create(
@@ -118,6 +128,68 @@ export class SchemaService {
     fields: (FieldInput & { id?: number })[],
     modifiedBy: string
   ): SchemaEntry {
+    const { newVersion, compatVersion, deletedFieldIds, retargetedFieldIds } =
+      this.validateAndComputeUpdate(name, fields);
+
+    this.repo.updateSchemaFields(
+      name,
+      fields,
+      newVersion,
+      compatVersion,
+      modifiedBy,
+      deletedFieldIds,
+      retargetedFieldIds
+    );
+
+    return this.repo.getSchema(name)!;
+  }
+
+  /**
+   * Read-only dry-run of `update()`. Runs the exact same validation,
+   * breaking-detection, and deleted/retargeted id computation as a real PATCH,
+   * then reports which existing entries would have their stored data disturbed
+   * — without writing anything.
+   */
+  previewUpdate(
+    name: string,
+    fields: (FieldInput & { id?: number })[]
+  ): SchemaUpdatePreview {
+    const {
+      existing,
+      newVersion,
+      isBreaking,
+      compatVersion,
+      deletedFieldIds,
+      retargetedFieldIds,
+    } = this.validateAndComputeUpdate(name, fields);
+
+    const affectedEntries = this.computeAffectedEntries(
+      existing,
+      fields,
+      this.contentRepo.listEntries(name),
+      deletedFieldIds,
+      retargetedFieldIds
+    );
+
+    return {
+      breaking: isBreaking,
+      version: newVersion,
+      compatVersion,
+      affectedEntries,
+    };
+  }
+
+  private validateAndComputeUpdate(
+    name: string,
+    fields: (FieldInput & { id?: number })[]
+  ): {
+    existing: SchemaEntry;
+    newVersion: number;
+    isBreaking: boolean;
+    compatVersion: number;
+    deletedFieldIds: number[];
+    retargetedFieldIds: number[];
+  } {
     const existing = this.repo.getSchema(name);
     if (!existing) {
       throw new SchemaServiceError(404, `Schema '${name}' not found`);
@@ -227,17 +299,14 @@ export class SchemaService {
       }
     }
 
-    this.repo.updateSchemaFields(
-      name,
-      fields,
+    return {
+      existing,
       newVersion,
+      isBreaking,
       compatVersion,
-      modifiedBy,
       deletedFieldIds,
-      retargetedFieldIds
-    );
-
-    return this.repo.getSchema(name)!;
+      retargetedFieldIds,
+    };
   }
 
   delete(name: string): void {
@@ -412,5 +481,145 @@ export class SchemaService {
 
     // label rename / reorder are non-breaking (R13)
     return false;
+  }
+
+  /**
+   * Per-change-kind "is this entry's stored data disturbed" rules. A field's
+   * stored value is read from BOTH tables (content_rows and content_refs)
+   * because stale storage survives type flips: a previous schema-ref→text flip
+   * leaves a stale content_refs row and a previous text→schema-ref flip leaves
+   * a stale content_rows row. Reading only one table would miss entries.
+   */
+  private computeAffectedEntries(
+    existing: SchemaEntry,
+    fields: (FieldInput & { id?: number })[],
+    entries: ContentEntryRow[],
+    deletedFieldIds: number[],
+    retargetedFieldIds: number[]
+  ): SchemaUpdatePreviewEntry[] {
+    const deletedIds = new Set(deletedFieldIds);
+    const retargetedIds = new Set(retargetedFieldIds);
+    const incomingById = new Map<number, FieldInput & { id?: number }>();
+    let hasNewRequiredField = false;
+    for (const f of fields) {
+      if (typeof f.id === "number") {
+        incomingById.set(f.id, f);
+      } else if (f.required) {
+        // A brand-new required field disturbs every entry (none can hold a
+        // value for it yet). It has no id until the PATCH applies, so it
+        // cannot contribute to affectedFieldIds — it only flags the entry.
+        hasNewRequiredField = true;
+      }
+    }
+
+    // Label convention (client `schemaLabelField`): first required field by
+    // sort_order; fall back to the first field. R8 guarantees a required
+    // field exists, so the fallback is defensive only.
+    const labelFieldId =
+      existing.fields.find((f) => f.required)?.id ??
+      existing.fields[0]?.id ??
+      null;
+
+    const affectedEntries: SchemaUpdatePreviewEntry[] = [];
+    for (const entry of entries) {
+      const rowsById = new Map<number, unknown>();
+      for (const row of entry.rows) {
+        rowsById.set(row.field_id, JSON.parse(row.value ?? "null") as unknown);
+      }
+      const refsById = new Map<number, number>();
+      for (const ref of entry.refs) {
+        refsById.set(ref.field_id, ref.target_content_id);
+      }
+      const hasStoredValue = (id: number): boolean =>
+        rowsById.has(id) || refsById.has(id);
+
+      const affectedFieldIds = new Set<number>();
+      let flagged = false;
+
+      for (const oldField of existing.fields) {
+        const id = oldField.id;
+
+        if (deletedIds.has(id)) {
+          // Field deleted: affected iff the entry stored anything for it.
+          if (hasStoredValue(id)) {
+            affectedFieldIds.add(id);
+            flagged = true;
+          }
+          continue;
+        }
+
+        const incoming = incomingById.get(id);
+        if (!incoming) continue;
+
+        // Kept field: number→text is lossless (R13/R17) → never affected.
+        if (oldField.type === "number" && incoming.type === "text") continue;
+
+        // Kept field, any other type change: affected iff a value is stored.
+        if (oldField.type !== incoming.type) {
+          if (hasStoredValue(id)) {
+            affectedFieldIds.add(id);
+            flagged = true;
+          }
+          continue;
+        }
+
+        // Kept schema-ref field whose ref_schema changed (retarget): the real
+        // PATCH purges the stored ref unconditionally (R35) → affected iff the
+        // entry holds a ref for the field (nothing to lose otherwise).
+        if (retargetedIds.has(id)) {
+          if (refsById.has(id)) {
+            affectedFieldIds.add(id);
+            flagged = true;
+          }
+          continue;
+        }
+
+        // Kept field, type + ref_schema unchanged, optional→required: affected
+        // iff the entry has no stored value, or the stored value is invalid
+        // under required semantics (the only such case: text `""`).
+        if (!oldField.required && incoming.required) {
+          if (!hasStoredValue(id) || rowsById.get(id) === "") {
+            affectedFieldIds.add(id);
+            flagged = true;
+          }
+          continue;
+        }
+
+        // Everything else (required→optional, label rename, reorder): never
+        // affected.
+      }
+
+      if (hasNewRequiredField) flagged = true;
+      if (!flagged) continue;
+
+      affectedEntries.push({
+        id: entry.record.id,
+        label: this.computeEntryLabel(entry, labelFieldId, rowsById, refsById),
+        affectedFieldIds: [...affectedFieldIds],
+      });
+    }
+
+    return affectedEntries;
+  }
+
+  private computeEntryLabel(
+    entry: ContentEntryRow,
+    labelFieldId: number | null,
+    rowsById: Map<number, unknown>,
+    refsById: Map<number, number>
+  ): string {
+    if (labelFieldId != null) {
+      const row = rowsById.get(labelFieldId);
+      if (row !== undefined) {
+        const text = String(row);
+        if (text !== "") return text;
+      }
+      const ref = refsById.get(labelFieldId);
+      if (ref !== undefined) {
+        const text = String(ref);
+        if (text !== "") return text;
+      }
+    }
+    return `Entry #${entry.record.id}`;
   }
 }
