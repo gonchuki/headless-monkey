@@ -24,6 +24,7 @@ import { entryLabel, schemaLabelField } from "@/lib/entries";
 import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
 import { SchemaBadge } from "@/components/shared/SchemaBadge";
+import { Switch } from "@/components/ui/switch";
 
 const ALL_SCHEMAS_VALUE = "__all__";
 
@@ -157,55 +158,57 @@ export default function ContentPage() {
       )}
 
       {schemas.length > 0 && (
-        <div className="grid max-w-xs gap-1.5">
-          <Label htmlFor="content-schema">Schema</Label>
-          <Select
-            value={selected ?? ALL_SCHEMAS_VALUE}
-            onValueChange={(value) => {
-              if (value == null) return;
-              if (value === ALL_SCHEMAS_VALUE) {
-                navigate(withConflicted("/content"));
-              } else {
-                navigate(withConflicted(`/content/${encodeURIComponent(value)}`));
-              }
-            }}
-          >
-            <SelectTrigger id="content-schema">
-              <SelectValue>
-                {(value) => {
-                  if (!value || value === ALL_SCHEMAS_VALUE) {
+        <div className="flex flex-row justify-between items-end">
+          <div className="grid max-w-xs gap-1.5">
+            <Label htmlFor="content-schema">Schema</Label>
+            <Select
+              value={selected ?? ALL_SCHEMAS_VALUE}
+              onValueChange={(value) => {
+                if (value == null) return;
+                if (value === ALL_SCHEMAS_VALUE) {
+                  navigate(withConflicted("/content"));
+                } else {
+                  navigate(withConflicted(`/content/${encodeURIComponent(value)}`));
+                }
+              }}
+            >
+              <SelectTrigger id="content-schema">
+                <SelectValue>
+                  {(value) => {
+                    if (!value || value === ALL_SCHEMAS_VALUE) {
+                      return (
+                        <>
+                          <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
+                          All schemas
+                        </>
+                      )
+                    }
+
                     return (
                       <>
-                        <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
-                        All schemas
+                        <SchemaBadge bgcolor={schemaColor(value).background} />
+                        {value}
                       </>
                     )
-                  }
-
-                  return (
-                    <>
-                      <SchemaBadge bgcolor={schemaColor(value).background} />
-                      {value}
-                    </>
-                  )
-                }}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_SCHEMAS_VALUE}>
-                <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
-                All schemas
-              </SelectItem>
-              {schemas.map((schema) => (
-                <SelectItem key={schema.name} value={schema.name}>
-                  <SchemaBadge bgcolor={schemaColor(schema.name).background} className="self-center" />
-                  {schema.name}
+                  }}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_SCHEMAS_VALUE}>
+                  <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
+                  All schemas
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                {schemas.map((schema) => (
+                  <SelectItem key={schema.name} value={schema.name}>
+                    <SchemaBadge bgcolor={schemaColor(schema.name).background} className="self-center" />
+                    {schema.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="flex items-center gap-2">
-            <Checkbox
+            <Switch
               id="conflicted-only"
               checked={conflictedOnly}
               onCheckedChange={(checked) =>
@@ -213,7 +216,7 @@ export default function ContentPage() {
               }
             />
             <Label htmlFor="conflicted-only" className="cursor-pointer font-normal">
-              Show conflicted only
+              Conflicted content only
             </Label>
           </div>
         </div>
