@@ -4,14 +4,14 @@ import { queryKeys } from "@/lib/query";
 
 export type EntryValues = Record<string, ContentValue | null>;
 
-export function useEntries(schemaName: string) {
+export function useEntries(schemaName: string, enabled = true) {
   const queryClient = useQueryClient();
   const key = queryKeys.entries(schemaName);
 
   const listQuery = useQuery({
     queryKey: key,
     queryFn: () => apiFetch<ContentListEntry[]>(`/api/schemas/${encodeURIComponent(schemaName)}/entries`),
-    enabled: schemaName.length > 0,
+    enabled: enabled && schemaName.length > 0,
   });
 
   const create = useMutation({
