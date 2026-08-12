@@ -13,7 +13,7 @@ import type { SchemaEntry } from "../src/types";
  * Proves the public read path cannot emit a dangling schema-ref — a public
  * `{id, schema}` value whose target entry does not exist in `content` (or
  * belongs to a different schema than the field's `ref_schema`). The guarantee
- * is enforced by construction (R34 blocked delete, R35 retarget purge, and the
+ * is enforced by construction (R34 clear-then-delete, R35 retarget purge, and the
  * `content_refs.target_content_id` ON DELETE RESTRICT FK); this file pins that
  * guarantee from the public route surface.
  *
@@ -277,7 +277,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
   });
 
   describe("R34 read-path proof (AC 3)", () => {
-    it("a blocked delete keeps refs resolving; after unblocking there are no dangles", async () => {
+    it("a clear-then-delete of a referenced target leaves no dangles", async () => {
       const { app, db, schemaService } = createTestApp();
       const { nameField, makeField, ownerField } = makePersonCar(schemaService);
       const token = editorToken();
@@ -495,7 +495,7 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
   });
 
   describe("negative would-be dangles (AC 6)", () => {
-    it("a deleted target (R34 409) and a retargeted ref (R35 422) never reach the public read", async () => {
+    it("a deleted target (R34 clear) and a retargeted ref (R35 422) never reach the public read", async () => {
       const { app, db, schemaService } = createTestApp();
       const token = editorToken();
 
