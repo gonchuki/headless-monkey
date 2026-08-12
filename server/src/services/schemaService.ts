@@ -316,7 +316,8 @@ export class SchemaService {
       fields,
       entries,
       deletedFieldIds,
-      retargetedFieldIds
+      retargetedFieldIds,
+      compatVersion
     );
 
     return {
@@ -331,17 +332,25 @@ export class SchemaService {
   }
 
   /**
-   * Compute which entries are compatible with the new schema shape and should
-   * have their schema_version bumped. This validation is the single source of
-   * truth for deconfliction — it replaces all prior heuristics (required→
-   * optional, deleted-required, type-change-then-delete, etc.). An entry is
-   * bumped iff its stored data satisfies the new field definitions.
+   * Compute which entries should have their schema_version bumped to the new
+   * version. Validation against the new field definitions is the single source
+   * of truth for compatibility (replaces all prior heuristics: required→
+   * optional, deleted-required, type-change-then-delete, etc.).
+   *
+   * A compatible entry is bumped only when it would otherwise read as
+   * conflicted — i.e. its schema_version is below the new compat_version. For
+   * breaking changes newCompatVersion === newVersion, so every compatible entry
+   * is bumped (preventing false conflicts). For non-breaking changes
+   * newCompatVersion is unchanged, so already-non-conflicted entries keep their
+   * version (their data was not touched); only entries whose conflict the change
+   * resolved are bumped. Incompatible entries are never bumped.
    */
   private computeUnaffectedEntryIds(
     fields: (FieldInput & { id?: number })[],
     entries: ContentEntryRow[],
     deletedFieldIds: number[],
-    retargetedFieldIds: number[]
+    retargetedFieldIds: number[],
+    newCompatVersion: number
   ): number[] {
     const unaffectedEntryIds: number[] = [];
 
@@ -349,6 +358,11 @@ export class SchemaService {
     const retargetedIds = new Set(retargetedFieldIds);
 
     for (const entry of entries) {
+      // Only entries that would read as conflicted need a bump. Entries already
+      // at or above the new compat_version stay on their version — nothing
+      // changed at the data level for them.
+      if (entry.record.schema_version >= newCompatVersion) continue;
+
       const rowsById = new Map<number, unknown>();
       for (const row of entry.rows) {
         rowsById.set(row.field_id, JSON.parse(row.value ?? "null") as unknown);

@@ -785,6 +785,45 @@ describe("SchemaService", () => {
       expect(listed.find((e) => e.id === entryB.id)?.conflict).toBe(false);
     });
 
+    it("non-breaking change does not bump already-non-conflicted entries", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+
+      // Entry created at version 1, non-conflicted
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota" },
+        "editor1"
+      );
+
+      // Non-breaking change: add an optional field. compat_version stays 1.
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      // Entry was already non-conflicted and its data was not touched →
+      // schema_version stays at 1 (not bumped to 2).
+      const entryAAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryA.id) as { schema_version: number };
+      expect(entryAAfter.schema_version).toBe(1);
+
+      // Still non-conflicted (1 >= compat_version 1)
+      expect(
+        contentService.listForSchema("car").find((e) => e.id === entryA.id)
+          ?.conflict
+      ).toBe(false);
+    });
+
     it("combined changes: type change + deletion affects all entries with any stored value", () => {
       const db = openDatabase();
       const schemaService = new SchemaService(db);
