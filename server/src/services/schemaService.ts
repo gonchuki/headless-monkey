@@ -368,6 +368,11 @@ export class SchemaService {
         requiredToOptionalIds.add(oldField.id);
       }
     }
+    // Deleted fields that were required: entries with no stored value were
+    // affected by the required constraint; deleting the field removes it.
+    const deletedRequiredIds = existing.fields
+      .filter((f) => deletedIds.has(f.id) && f.required)
+      .map((f) => f.id);
 
     for (const entry of entries) {
       const rowsById = new Map<number, unknown>();
@@ -381,15 +386,20 @@ export class SchemaService {
       const hasStoredValue = (id: number): boolean =>
         rowsById.has(id) || refsById.has(id);
 
-      let isAffected = false;
+      // Track incompatibility separately from deletion effects. Deletions
+      // remove constraints (entry becomes compatible), while type changes
+      // and optional→required create incompatibilities (entry stays behind).
+      let isAffectedByIncompatibility = false;
+      let hasDeletedStoredValue = false;
 
       for (const oldField of existing.fields) {
         const id = oldField.id;
 
         if (deletedIds.has(id)) {
-          // Field deleted: affected iff the entry stored anything for it.
+          // Field deleted: track whether entry had data (for preview), but
+          // don't mark as incompatible — the constraint is gone.
           if (hasStoredValue(id)) {
-            isAffected = true;
+            hasDeletedStoredValue = true;
           }
           continue;
         }
@@ -403,7 +413,7 @@ export class SchemaService {
         // Kept field, any other type change: affected iff a value is stored.
         if (oldField.type !== incoming.type) {
           if (hasStoredValue(id)) {
-            isAffected = true;
+            isAffectedByIncompatibility = true;
           }
           continue;
         }
@@ -412,7 +422,7 @@ export class SchemaService {
         // iff the entry holds a ref for the field.
         if (retargetedIds.has(id)) {
           if (refsById.has(id)) {
-            isAffected = true;
+            isAffectedByIncompatibility = true;
           }
           continue;
         }
@@ -422,7 +432,7 @@ export class SchemaService {
         // under required semantics (the only such case: text `""`).
         if (!oldField.required && incoming.required) {
           if (!hasStoredValue(id) || rowsById.get(id) === "") {
-            isAffected = true;
+            isAffectedByIncompatibility = true;
           }
           continue;
         }
@@ -431,26 +441,26 @@ export class SchemaService {
         // affected.
       }
 
-      if (hasNewRequiredField) isAffected = true;
+      if (hasNewRequiredField) isAffectedByIncompatibility = true;
 
-      if (isAffected) {
+      if (isAffectedByIncompatibility || hasDeletedStoredValue) {
+        // Entry is incompatible with the new schema shape, or lost data from
+        // deletions — keep it conflicted.
         affectedEntryIds.add(entry.record.id);
       } else {
-        // Entry is unaffected by the current changes. But if it was previously
-        // conflicted (schema_version < compat_version), preserve its conflict
-        // state — do not bump its schema_version. Exception: if a field going
-        // required→optional resolves the entry's conflict (entry has no stored
-        // value for that field), deconflict it by bumping schema_version.
-        // Deletions are not included: we cannot distinguish "entry was
-        // conflicted because this field existed" from "entry was conflicted
-        // for an unrelated reason and also happens to have no value for the
-        // deleted field."
+        // Entry is unaffected by non-deletion changes and has no deleted data.
+        // If it was previously conflicted, check if required→optional or
+        // deletion of required field resolves its conflict.
         if (entry.record.schema_version < currentCompatVersion) {
-          const deconflicted = [...requiredToOptionalIds].some(
-            // Entry has no stored value for a field that's now optional →
-            // its prior conflict (from that field becoming required) is resolved.
-            (id) => !hasStoredValue(id)
-          );
+          const deconflicted =
+            // Deletion of required field: entry had no value → was affected
+            // by the required constraint; constraint is now gone.
+            deletedRequiredIds.some((id) => !hasStoredValue(id)) ||
+            // required→optional: entry had no value → was affected by the
+            // required constraint; constraint is now relaxed.
+            [...requiredToOptionalIds].some(
+              (id) => !hasStoredValue(id)
+            );
           if (deconflicted) {
             unaffectedEntryIds.push(entry.record.id);
           } else {
@@ -674,8 +684,9 @@ export class SchemaService {
 
     const affectedEntries: SchemaUpdatePreviewEntry[] = [];
     for (const entry of entries) {
-      if (!affectedEntryIds.has(entry.record.id)) continue;
-
+      // Iterate over all entries, not just affectedEntryIds. Entries only
+      // affected by deletions are in unaffectedEntryIds (they get bumped),
+      // but their data is still being removed and should be reported.
       const rowsById = new Map<number, unknown>();
       for (const row of entry.rows) {
         rowsById.set(row.field_id, JSON.parse(row.value ?? "null") as unknown);
