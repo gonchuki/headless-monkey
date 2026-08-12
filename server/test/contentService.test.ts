@@ -480,7 +480,7 @@ describe("ContentService", () => {
     });
   });
 
-  describe("delete (R34 referencer block)", () => {
+  describe("delete (R34 clear-then-delete)", () => {
     function makePersonCar(schemaService: SchemaService) {
       makeSchema(schemaService, "person", [
         { label: "name", type: "text", required: true },

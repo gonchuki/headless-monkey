@@ -217,7 +217,7 @@ describe("GET /api/events", () => {
     });
   });
 
-  it("does not broadcast entry.deleted for a blocked delete (R34)", async () => {
+  it("broadcasts entry.deleted when deleting a referenced entry clears its refs (R34)", async () => {
     const { app } = setup();
     const token = editorToken("alice");
 

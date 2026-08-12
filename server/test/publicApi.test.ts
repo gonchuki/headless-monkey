@@ -351,8 +351,8 @@ describe("Public content API (R18-R20)", () => {
     });
   });
 
-  describe("editor delete blocks referenced entries (R34)", () => {
-    it("returns 409 naming the referencer count for a referenced entry; 204 for an unreferenced one", async () => {
+  describe("editor delete clears refs on referenced entries (R34)", () => {
+    it("deletes a referenced entry by clearing its refs (204); unreferenced deletes stay 204", async () => {
       const { app, schemaService } = createTestApp();
       const personSchema = schemaService.create(
         "person",
