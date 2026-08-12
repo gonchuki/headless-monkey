@@ -11,6 +11,7 @@ export interface SchemaFieldGridProps {
   onFieldChange: (index: number, patch: Partial<Omit<SchemaDraft, "id">>) => void;
   onAddField: () => void;
   onRemoveField: (index: number) => void;
+  onRestoreField?: (index: number) => void;
   onMoveUp: (index: number) => void;
   onMoveDown: (index: number) => void;
 }
@@ -22,6 +23,7 @@ export function SchemaFieldGrid({
   onFieldChange,
   onAddField,
   onRemoveField,
+  onRestoreField,
   onMoveUp,
   onMoveDown,
 }: SchemaFieldGridProps) {
@@ -45,8 +47,10 @@ export function SchemaFieldGrid({
               total={fields.length}
               refSchemas={refSchemas}
               disabled={disabled}
+              deleted={field.deleted}
               onChange={onFieldChange}
               onRemove={onRemoveField}
+              onRestore={onRestoreField}
               onMoveUp={onMoveUp}
               onMoveDown={onMoveDown}
             />
