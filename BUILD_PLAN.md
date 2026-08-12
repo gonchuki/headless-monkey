@@ -1,4 +1,6 @@
-# BUILD_PLAN: headless-monkey CMS   (v0.3 — 2026-08-10, derived from SPEC.md v0.9)
+# BUILD_PLAN: headless-monkey CMS   (v0.4 — 2026-08-12, derived from SPEC.md v0.9)
+
+v0.4 — corrected R34's delete semantics to match the implementation (SPEC R34 updated in lockstep): deleting an entry that other entries reference no longer 409-blocks — the delete clears the incoming `content_refs` in the same transaction and returns 204, leaving the referencers' field as an absent key until re-edited (never `null`). The `referencer_count` stays on editor list rows as the delete-confirmation warning, not an enforcement gate (M3 steps 1/3/5, M6 step 1).
 
 v0.3 — reconciled to SPEC v0.9: the v0.2 open questions are resolved and folded into Resolved decisions — R16 editor `POST`/`PATCH` writes are patch-like (an omitted key leaves the stored value unchanged; an explicit `null` for an *optional* field clears its stored value, removing the stored `content_ref` for a schema-ref field; `null` for a *required* field is 422); `GET /api/schemas/:name/entries` rows add `referencer_count` (M3 returns it; M6's delete confirmation and M7's realtime disable consume it); the M6 schema-ref `<select>` gains an `[empty]` entry that submits `null`; M4 registers the full R29 route table with placeholder pages. No milestones added, retired, or renumbered.
 
@@ -31,7 +33,7 @@ v0.2 — reconciled to SPEC v0.8: M1 gains `content_refs` DDL, R8's required-lab
   4. Routes `GET/POST /api/schemas`, `GET/PATCH/DELETE /api/schemas/:name` with R8–R10 status codes. Mounted unauthenticated here; the guard lands in M2.
   5. Tests: every row of the §7 compat table (assert resulting version + compat_version), R8 (incl. whitespace-only labels, no-required-fields, duplicate labels), R9–R15, R21 (incl. `content_refs` purge + mixed-PATCH exception), R22, R35, direct + transitive cycle rejection.
 - **Verify:** `pnpm --filter server test` passes (schema suite).
-- **Out of scope:** auth/guards (M2), entry CRUD + R34 referencer block (M3), all client code.
+- **Out of scope:** auth/guards (M2), entry CRUD + R34 referencer clear-then-delete (M3), all client code.
 
 ## M2 — Auth + users (server)
 
@@ -51,16 +53,16 @@ v0.2 — reconciled to SPEC v0.8: M1 gains `content_refs` DDL, R8's required-lab
 
 ## M3 — Content + public API (server)
 
-- **Goal:** Editors create/edit/delete entries (deleting a schema-ref target blocked with a referencer-count 409); the unauthenticated data API returns the `{schema, entries}` envelope and distinguishes unknown (404) from conflicted (422).
+- **Goal:** Editors create/edit/delete entries (deleting a schema-ref target clears the incoming refs in the same transaction and returns 204 — R34); the unauthenticated data API returns the `{schema, entries}` envelope and distinguishes unknown (404) from conflicted (422).
 - **Spec refs:** SPEC §2 R15 (self-describing public shape), R16–R20, R34; §4 content routes, public API envelope, value serialization; §7 status + serialization examples; §5 service-layer tests.
 - **File scope:** `server/src/repositories/contentRepo.ts`, `server/src/services/contentService.ts`, `server/src/routes/content.ts` (public, unauthenticated), `server/src/routes/entries.ts` (guarded), `server/src/app.ts` (mount), `server/test/contentService.test.ts`, `server/test/publicApi.test.ts`.
 - **Depends on:** M2.
 - **Steps:**
   1. `contentRepo`: insert entry + `content_rows` (scalars) + `content_refs` (schema-ref targets as INTEGER), replace rows/refs on update, delete, list by schema (with `conflict` flag = `schema_version < compat_version`), get by id, count referencers per target (R34).
   2. `contentService` per SPEC §6: validation (required fields present and type-valid — required `text` must be non-empty, unknown `field_id` → 422, schema-ref value is an existing entry of the target schema → 422, optional schema-ref with no target omitted from `values` and never serialized as `null`; editor `POST`/`PATCH` writes are patch-like per R16 — an omitted key leaves the stored value unchanged, an explicit `null` for an optional field clears it (schema-ref: removes the stored `content_ref`), `null` for a required field is a validation error (422). The server already implements the patch-like/null behavior, so no behavior change is required here); on save auto-coerce values when lossless (`number`→`text`), reject until re-entered otherwise, and set `schema_version` = schema's current version (R17); store refs in `content_refs`, never as a JSON number in `content_rows.value` (§4 value serialization).
-  3. Editor routes: `GET /api/schemas/:name/entries` (incl. conflicted; each row carries `conflict: boolean` and `referencer_count` — the count of distinct entries referencing the row via schema-ref, served cheaply from `idx_content_refs_target`); `POST /api/schemas/:name/entries`, `PATCH /api/entries/:id` (both payloads are patch-like per R16), `DELETE /api/entries/:id` (409 naming the referencer count when the entry is a schema-ref target — R34).
+  3. Editor routes: `GET /api/schemas/:name/entries` (incl. conflicted; each row carries `conflict: boolean` and `referencer_count` — the count of distinct entries referencing the row via schema-ref, served cheaply from `idx_content_refs_target`); `POST /api/schemas/:name/entries`, `PATCH /api/entries/:id` (both payloads are patch-like per R16), `DELETE /api/entries/:id` (clears all `content_refs` pointing at the entry and deletes it in one transaction → 204 — R34; the `referencer_count` feeds the delete-dialog warning, it does not block).
   4. Public routes (no auth): `GET /api/content/:schema` → 200 `{schema, entries}` valid-only / 404 unknown schema (R18); `GET /api/content/:schema/:id` → 200 one-element `entries` / 404 unknown id / 422 conflicted (R19, mutually exclusive); `schema.fields` is a `String(field_id)` → current label map, `values` keyed by `String(field_id)`, schema-ref values `{id, schema}`, entries carry no redundant schema field (§4 envelope, R15).
-  5. Tests R15 (self-describing), R16–R20 (incl. the null-clear and omitted-key cases: a `PATCH` sending `null` for an optional schema-ref field removes its stored `content_ref`; omitting the key leaves the stored value unchanged; `null` for a required field → 422), R34 (409 + referencer count; editor list rows carry `referencer_count`), §7 serialization examples (envelope, `String(field_id)` keys, `{id, schema}` refs), conflict→edit→valid cycle.
+  5. Tests R15 (self-describing), R16–R20 (incl. the null-clear and omitted-key cases: a `PATCH` sending `null` for an optional schema-ref field removes its stored `content_ref`; omitting the key leaves the stored value unchanged; `null` for a required field → 422), R34 (clear-then-delete → 204, refs gone, referencer rows keep the absent-key field; editor list rows carry `referencer_count`), §7 serialization examples (envelope, `String(field_id)` keys, `{id, schema}` refs), conflict→edit→valid cycle.
 - **Verify:** `pnpm --filter server test` passes (content + public API suites).
 - **Out of scope:** SSE (M7), pagination/search (non-goal), client code.
 
