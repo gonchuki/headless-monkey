@@ -447,6 +447,179 @@ describe("SchemaService", () => {
       expect(schema.compat_version).toBe(2); // = new version
     });
 
+    it("selective bump: text→number on optional field bumps only entries without stored values", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "year", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const yearField = schema.fields.find((f) => f.label === "year")!;
+
+      // Entry A: has a text value for the year field → affected by type change
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota", [String(yearField.id)]: "2020" },
+        "editor1"
+      );
+
+      // Entry B: no value for the year field → unaffected
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda" },
+        "editor1"
+      );
+
+      // Change year from text to number (breaking)
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: yearField.id, label: "year", type: "number", required: false },
+      ], "editor1");
+
+      // Entry A had a stored text value → conflicted (not bumped)
+      const entryAAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryA.id) as { schema_version: number };
+      expect(entryAAfter.schema_version).toBe(1);
+
+      // Entry B had no stored value → compatible (bumped)
+      const entryBAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryB.id) as { schema_version: number };
+      expect(entryBAfter.schema_version).toBe(2);
+
+      // Verify via listForSchema
+      const listed = contentService.listForSchema("car");
+      expect(listed.find((e) => e.id === entryA.id)?.conflict).toBe(true);
+      expect(listed.find((e) => e.id === entryB.id)?.conflict).toBe(false);
+    });
+
+    it("selective bump: optional→required bumps only entries with valid values", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const colorField = schema.fields.find((f) => f.label === "color")!;
+
+      // Entry A: has a value for the color field → unaffected (already complies)
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota", [String(colorField.id)]: "Red" },
+        "editor1"
+      );
+
+      // Entry B: no value for the color field → affected
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda" },
+        "editor1"
+      );
+
+      // Make color required (breaking)
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: colorField.id, label: "color", type: "text", required: true },
+      ], "editor1");
+
+      // Entry A had a valid value → compatible (bumped)
+      const entryAAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryA.id) as { schema_version: number };
+      expect(entryAAfter.schema_version).toBe(2);
+
+      // Entry B had no value → conflicted (not bumped)
+      const entryBAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryB.id) as { schema_version: number };
+      expect(entryBAfter.schema_version).toBe(1);
+
+      // Verify via listForSchema
+      const listed = contentService.listForSchema("car");
+      expect(listed.find((e) => e.id === entryA.id)?.conflict).toBe(false);
+      expect(listed.find((e) => e.id === entryB.id)?.conflict).toBe(true);
+    });
+
+    it("combined changes: type change + deletion affects all entries with any stored value", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+        { label: "year", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const colorField = schema.fields.find((f) => f.label === "color")!;
+      const yearField = schema.fields.find((f) => f.label === "year")!;
+
+      // Entry A: has value for year only → affected by type change on year
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota", [String(yearField.id)]: "2020" },
+        "editor1"
+      );
+
+      // Entry B: has value for color only → affected by deletion of color
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda", [String(colorField.id)]: "Red" },
+        "editor1"
+      );
+
+      // Entry C: has values for both → affected by both
+      const entryC = contentService.create(
+        "car",
+        {
+          [String(makeField.id)]: "Ford",
+          [String(colorField.id)]: "Blue",
+          [String(yearField.id)]: "2019",
+        },
+        "editor1"
+      );
+
+      // Change year to number (breaking) AND delete color field (breaking)
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: yearField.id, label: "year", type: "number", required: false },
+      ], "editor1");
+
+      // All entries are affected → none should be bumped
+      const entryAAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryA.id) as { schema_version: number };
+      const entryBAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryB.id) as { schema_version: number };
+      const entryCAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryC.id) as { schema_version: number };
+
+      expect(entryAAfter.schema_version).toBe(1);
+      expect(entryBAfter.schema_version).toBe(1);
+      expect(entryCAfter.schema_version).toBe(1);
+
+      // All should be conflicted
+      const listed = contentService.listForSchema("car");
+      expect(listed.find((e) => e.id === entryA.id)?.conflict).toBe(true);
+      expect(listed.find((e) => e.id === entryB.id)?.conflict).toBe(true);
+      expect(listed.find((e) => e.id === entryC.id)?.conflict).toBe(true);
+    });
+
     it("field rename does not change field_id (R15)", () => {
       const service = createService();
       service.create("car", [
@@ -678,6 +851,128 @@ describe("SchemaService", () => {
         .prepare(`SELECT schema_version FROM content WHERE id = ?`)
         .get(entryId1) as { schema_version: number };
       expect(entry.schema_version).toBe(2); // new version after delete
+    });
+
+    it("deleting a field bumps only previously-compatible entries (selective R21)", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const colorField = schema.fields.find((f) => f.label === "color")!;
+
+      // Entry A: has a value for the color field → affected by deletion
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota", [String(colorField.id)]: "Red" },
+        "editor1"
+      );
+
+      // Entry B: no value for the color field → unaffected by deletion
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda" },
+        "editor1"
+      );
+
+      // Delete the color field
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+      ], "editor1");
+
+      // Entry A had a stored value for the deleted field → should be conflicted
+      const entryAAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryA.id) as { schema_version: number };
+      expect(entryAAfter.schema_version).toBe(1); // not bumped, stays behind
+
+      // Entry B had no stored value → should be compatible (bumped)
+      const entryBAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryB.id) as { schema_version: number };
+      expect(entryBAfter.schema_version).toBe(2); // bumped to new version
+
+      // Verify via listForSchema
+      const listed = contentService.listForSchema("car");
+      const aConflict = listed.find((e) => e.id === entryA.id)?.conflict;
+      const bConflict = listed.find((e) => e.id === entryB.id)?.conflict;
+      expect(aConflict).toBe(true);
+      expect(bConflict).toBe(false);
+    });
+
+    it("preserves previously-conflicted entries through a field deletion", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+        { label: "year", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const colorField = schema.fields.find((f) => f.label === "color")!;
+      const yearField = schema.fields.find((f) => f.label === "year")!;
+
+      // Entry A: has values for both optional fields
+      const entryA = contentService.create(
+        "car",
+        {
+          [String(makeField.id)]: "Toyota",
+          [String(colorField.id)]: "Red",
+          [String(yearField.id)]: "2020",
+        },
+        "editor1"
+      );
+
+      // Entry B: no optional values
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda" },
+        "editor1"
+      );
+
+      // First: make a breaking change that conflicts entry A (text→number on year)
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: colorField.id, label: "color", type: "text", required: false },
+        { id: yearField.id, label: "year", type: "number", required: false },
+      ], "editor1");
+
+      // Entry A is now conflicted (has text value for a number field)
+      let listed = contentService.listForSchema("car");
+      expect(listed.find((e) => e.id === entryA.id)?.conflict).toBe(true);
+      expect(listed.find((e) => e.id === entryB.id)?.conflict).toBe(false);
+
+      // Second: delete the color field
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: yearField.id, label: "year", type: "number", required: false },
+      ], "editor1");
+
+      // Entry A was already conflicted → should stay conflicted (not bumped)
+      const entryAAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryA.id) as { schema_version: number };
+      expect(entryAAfter.schema_version).toBe(1); // still behind
+
+      // Entry B was compatible → should be bumped to latest version
+      const entryBAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryB.id) as { schema_version: number };
+      expect(entryBAfter.schema_version).toBe(3); // bumped through both changes
+
+      listed = contentService.listForSchema("car");
+      expect(listed.find((e) => e.id === entryA.id)?.conflict).toBe(true);
+      expect(listed.find((e) => e.id === entryB.id)?.conflict).toBe(false);
     });
   });
 

@@ -129,8 +129,9 @@ export class SchemaRepository {
     version: number,
     compatVersion: number,
     modifiedBy: string,
-    deletedFieldIds: number[],
-    retargetedFieldIds: number[]
+    _deletedFieldIds: number[],
+    retargetedFieldIds: number[],
+    unaffectedEntryIds: number[]
   ): void {
     const now = new Date().toISOString();
 
@@ -148,17 +149,21 @@ export class SchemaRepository {
         .run(...retargetedFieldIds, schemaName);
     }
 
-    if (deletedFieldIds.length > 0 && retargetedFieldIds.length === 0) {
-      // R21: field deletion bumps every surviving entry's schema_version. The
-      // content_rows removal for deleted fields is handled by the DDL's
-      // `schema_fields.id` ON DELETE CASCADE (no manual prune needed).
-      //
-      // The bump is schema-wide and therefore gated on there being no retarget
-      // (R35): a mixed PATCH (delete field X + retarget field Y) must not
-      // un-conflict entries that still miss a valid target for Y.
+    // Selective schema_version bump: only bump entries that are compatible with
+    // the new schema shape. Entries not in this set fall behind compat_version
+    // and become conflicted naturally. This replaces the blanket R21 bump.
+    // Gated on no retargets (R35): a mixed PATCH must not un-conflict entries
+    // that still miss a valid target for the retargeted field.
+    if (
+      unaffectedEntryIds.length > 0 &&
+      retargetedFieldIds.length === 0
+    ) {
+      const placeholders = unaffectedEntryIds.map(() => "?").join(", ");
       this.db
-        .prepare("UPDATE content SET schema_version = ? WHERE schema = ?")
-        .run(version, schemaName);
+        .prepare(
+          `UPDATE content SET schema_version = ? WHERE id IN (${placeholders})`
+        )
+        .run(version, ...unaffectedEntryIds);
     }
 
     const deleteField = this.db.prepare(

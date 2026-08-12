@@ -128,8 +128,13 @@ export class SchemaService {
     fields: (FieldInput & { id?: number })[],
     modifiedBy: string
   ): SchemaEntry {
-    const { newVersion, compatVersion, deletedFieldIds, retargetedFieldIds } =
-      this.validateAndComputeUpdate(name, fields);
+    const {
+      newVersion,
+      compatVersion,
+      deletedFieldIds,
+      retargetedFieldIds,
+      unaffectedEntryIds,
+    } = this.validateAndComputeUpdate(name, fields);
 
     this.repo.updateSchemaFields(
       name,
@@ -138,7 +143,8 @@ export class SchemaService {
       compatVersion,
       modifiedBy,
       deletedFieldIds,
-      retargetedFieldIds
+      retargetedFieldIds,
+      unaffectedEntryIds
     );
 
     return this.repo.getSchema(name)!;
@@ -161,14 +167,17 @@ export class SchemaService {
       compatVersion,
       deletedFieldIds,
       retargetedFieldIds,
+      affectedEntryIds,
     } = this.validateAndComputeUpdate(name, fields);
 
-    const affectedEntries = this.computeAffectedEntries(
+    const entries = this.contentRepo.listEntries(name);
+    const affectedEntries = this.buildPreviewEntries(
       existing,
       fields,
-      this.contentRepo.listEntries(name),
+      entries,
       deletedFieldIds,
-      retargetedFieldIds
+      retargetedFieldIds,
+      affectedEntryIds
     );
 
     return {
@@ -189,6 +198,8 @@ export class SchemaService {
     compatVersion: number;
     deletedFieldIds: number[];
     retargetedFieldIds: number[];
+    unaffectedEntryIds: number[];
+    affectedEntryIds: Set<number>;
   } {
     const existing = this.repo.getSchema(name);
     if (!existing) {
@@ -299,6 +310,17 @@ export class SchemaService {
       }
     }
 
+    const entries = this.contentRepo.listEntries(name);
+    const { affectedEntryIds, unaffectedEntryIds } =
+      this.computeAffectedAndUnaffected(
+        existing,
+        fields,
+        entries,
+        deletedFieldIds,
+        retargetedFieldIds,
+        existing.compat_version
+      );
+
     return {
       existing,
       newVersion,
@@ -306,7 +328,117 @@ export class SchemaService {
       compatVersion,
       deletedFieldIds,
       retargetedFieldIds,
+      unaffectedEntryIds,
+      affectedEntryIds,
     };
+  }
+
+  private computeAffectedAndUnaffected(
+    existing: SchemaEntry,
+    fields: (FieldInput & { id?: number })[],
+    entries: ContentEntryRow[],
+    deletedFieldIds: number[],
+    retargetedFieldIds: number[],
+    currentCompatVersion: number
+  ): {
+    affectedEntryIds: Set<number>;
+    unaffectedEntryIds: number[];
+  } {
+    const affectedEntryIds = new Set<number>();
+    const unaffectedEntryIds: number[] = [];
+
+    const deletedIds = new Set(deletedFieldIds);
+    const retargetedIds = new Set(retargetedFieldIds);
+    const incomingById = new Map<number, FieldInput & { id?: number }>();
+    let hasNewRequiredField = false;
+    for (const f of fields) {
+      if (typeof f.id === "number") {
+        incomingById.set(f.id, f);
+      } else if (f.required) {
+        hasNewRequiredField = true;
+      }
+    }
+
+    for (const entry of entries) {
+      const rowsById = new Map<number, unknown>();
+      for (const row of entry.rows) {
+        rowsById.set(row.field_id, JSON.parse(row.value ?? "null") as unknown);
+      }
+      const refsById = new Map<number, number>();
+      for (const ref of entry.refs) {
+        refsById.set(ref.field_id, ref.target_content_id);
+      }
+      const hasStoredValue = (id: number): boolean =>
+        rowsById.has(id) || refsById.has(id);
+
+      let isAffected = false;
+
+      for (const oldField of existing.fields) {
+        const id = oldField.id;
+
+        if (deletedIds.has(id)) {
+          // Field deleted: affected iff the entry stored anything for it.
+          if (hasStoredValue(id)) {
+            isAffected = true;
+          }
+          continue;
+        }
+
+        const incoming = incomingById.get(id);
+        if (!incoming) continue;
+
+        // Kept field: number→text is lossless (R13/R17) → never affected.
+        if (oldField.type === "number" && incoming.type === "text") continue;
+
+        // Kept field, any other type change: affected iff a value is stored.
+        if (oldField.type !== incoming.type) {
+          if (hasStoredValue(id)) {
+            isAffected = true;
+          }
+          continue;
+        }
+
+        // Kept schema-ref field whose ref_schema changed (retarget): affected
+        // iff the entry holds a ref for the field.
+        if (retargetedIds.has(id)) {
+          if (refsById.has(id)) {
+            isAffected = true;
+          }
+          continue;
+        }
+
+        // Kept field, type + ref_schema unchanged, optional→required: affected
+        // iff the entry has no stored value, or the stored value is invalid
+        // under required semantics (the only such case: text `""`).
+        if (!oldField.required && incoming.required) {
+          if (!hasStoredValue(id) || rowsById.get(id) === "") {
+            isAffected = true;
+          }
+          continue;
+        }
+
+        // Everything else (required→optional, label rename, reorder): never
+        // affected.
+      }
+
+      if (hasNewRequiredField) isAffected = true;
+
+      if (isAffected) {
+        affectedEntryIds.add(entry.record.id);
+      } else {
+        // Entry is unaffected by the current changes. But if it was previously
+        // conflicted (schema_version < compat_version), preserve its conflict
+        // state — do not bump its schema_version.
+        if (entry.record.schema_version < currentCompatVersion) {
+          // Previously conflicted — keep it conflicted.
+          affectedEntryIds.add(entry.record.id);
+        } else {
+          unaffectedEntryIds.push(entry.record.id);
+        }
+      }
+    }
+
+    return { affectedEntryIds, unaffectedEntryIds };
   }
 
   delete(name: string): void {
@@ -484,18 +616,16 @@ export class SchemaService {
   }
 
   /**
-   * Per-change-kind "is this entry's stored data disturbed" rules. A field's
-   * stored value is read from BOTH tables (content_rows and content_refs)
-   * because stale storage survives type flips: a previous schema-ref→text flip
-   * leaves a stale content_refs row and a previous text→schema-ref flip leaves
-   * a stale content_rows row. Reading only one table would miss entries.
+   * Build preview entries from the classification result. Re-iterates entries
+   * to compute per-entry affectedFieldIds and labels for the preview response.
    */
-  private computeAffectedEntries(
+  private buildPreviewEntries(
     existing: SchemaEntry,
     fields: (FieldInput & { id?: number })[],
     entries: ContentEntryRow[],
     deletedFieldIds: number[],
-    retargetedFieldIds: number[]
+    retargetedFieldIds: number[],
+    affectedEntryIds: Set<number>
   ): SchemaUpdatePreviewEntry[] {
     const deletedIds = new Set(deletedFieldIds);
     const retargetedIds = new Set(retargetedFieldIds);
@@ -505,9 +635,6 @@ export class SchemaService {
       if (typeof f.id === "number") {
         incomingById.set(f.id, f);
       } else if (f.required) {
-        // A brand-new required field disturbs every entry (none can hold a
-        // value for it yet). It has no id until the PATCH applies, so it
-        // cannot contribute to affectedFieldIds — it only flags the entry.
         hasNewRequiredField = true;
       }
     }
@@ -522,6 +649,8 @@ export class SchemaService {
 
     const affectedEntries: SchemaUpdatePreviewEntry[] = [];
     for (const entry of entries) {
+      if (!affectedEntryIds.has(entry.record.id)) continue;
+
       const rowsById = new Map<number, unknown>();
       for (const row of entry.rows) {
         rowsById.set(row.field_id, JSON.parse(row.value ?? "null") as unknown);
@@ -534,63 +663,40 @@ export class SchemaService {
         rowsById.has(id) || refsById.has(id);
 
       const affectedFieldIds = new Set<number>();
-      let flagged = false;
 
       for (const oldField of existing.fields) {
         const id = oldField.id;
 
         if (deletedIds.has(id)) {
-          // Field deleted: affected iff the entry stored anything for it.
-          if (hasStoredValue(id)) {
-            affectedFieldIds.add(id);
-            flagged = true;
-          }
+          if (hasStoredValue(id)) affectedFieldIds.add(id);
           continue;
         }
 
         const incoming = incomingById.get(id);
         if (!incoming) continue;
 
-        // Kept field: number→text is lossless (R13/R17) → never affected.
         if (oldField.type === "number" && incoming.type === "text") continue;
 
-        // Kept field, any other type change: affected iff a value is stored.
         if (oldField.type !== incoming.type) {
-          if (hasStoredValue(id)) {
-            affectedFieldIds.add(id);
-            flagged = true;
-          }
+          if (hasStoredValue(id)) affectedFieldIds.add(id);
           continue;
         }
 
-        // Kept schema-ref field whose ref_schema changed (retarget): the real
-        // PATCH purges the stored ref unconditionally (R35) → affected iff the
-        // entry holds a ref for the field (nothing to lose otherwise).
         if (retargetedIds.has(id)) {
-          if (refsById.has(id)) {
-            affectedFieldIds.add(id);
-            flagged = true;
-          }
+          if (refsById.has(id)) affectedFieldIds.add(id);
           continue;
         }
 
-        // Kept field, type + ref_schema unchanged, optional→required: affected
-        // iff the entry has no stored value, or the stored value is invalid
-        // under required semantics (the only such case: text `""`).
         if (!oldField.required && incoming.required) {
           if (!hasStoredValue(id) || rowsById.get(id) === "") {
             affectedFieldIds.add(id);
-            flagged = true;
           }
           continue;
         }
-
-        // Everything else (required→optional, label rename, reorder): never
-        // affected.
       }
 
-      if (hasNewRequiredField) flagged = true;
-      if (!flagged) continue;
+      // hasNewRequiredField entries have no specific field to report
+      if (!hasNewRequiredField && affectedFieldIds.size === 0) continue;
 
       affectedEntries.push({
         id: entry.record.id,
