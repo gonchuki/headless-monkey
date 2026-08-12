@@ -350,12 +350,22 @@ export class SchemaService {
     const deletedIds = new Set(deletedFieldIds);
     const retargetedIds = new Set(retargetedFieldIds);
     const incomingById = new Map<number, FieldInput & { id?: number }>();
+    // Track fields going required→optional — entries missing a value for such
+    // a field should be deconflicted (their conflict was caused by this field
+    // becoming required; making it optional resolves that conflict).
+    const requiredToOptionalIds = new Set<number>();
     let hasNewRequiredField = false;
     for (const f of fields) {
       if (typeof f.id === "number") {
         incomingById.set(f.id, f);
       } else if (f.required) {
         hasNewRequiredField = true;
+      }
+    }
+    for (const oldField of existing.fields) {
+      const incoming = incomingById.get(oldField.id);
+      if (incoming && oldField.required && !incoming.required) {
+        requiredToOptionalIds.add(oldField.id);
       }
     }
 
@@ -428,10 +438,25 @@ export class SchemaService {
       } else {
         // Entry is unaffected by the current changes. But if it was previously
         // conflicted (schema_version < compat_version), preserve its conflict
-        // state — do not bump its schema_version.
+        // state — do not bump its schema_version. Exception: if a field going
+        // required→optional resolves the entry's conflict (entry has no stored
+        // value for that field), deconflict it by bumping schema_version.
+        // Deletions are not included: we cannot distinguish "entry was
+        // conflicted because this field existed" from "entry was conflicted
+        // for an unrelated reason and also happens to have no value for the
+        // deleted field."
         if (entry.record.schema_version < currentCompatVersion) {
-          // Previously conflicted — keep it conflicted.
-          affectedEntryIds.add(entry.record.id);
+          const deconflicted = [...requiredToOptionalIds].some(
+            // Entry has no stored value for a field that's now optional →
+            // its prior conflict (from that field becoming required) is resolved.
+            (id) => !hasStoredValue(id)
+          );
+          if (deconflicted) {
+            unaffectedEntryIds.push(entry.record.id);
+          } else {
+            // Previously conflicted — keep it conflicted.
+            affectedEntryIds.add(entry.record.id);
+          }
         } else {
           unaffectedEntryIds.push(entry.record.id);
         }
