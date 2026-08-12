@@ -609,6 +609,63 @@ describe("SchemaService", () => {
       ).toBe(false);
     });
 
+    it("deleting a required field deconflicts entries missing its value", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const colorField = schema.fields.find((f) => f.label === "color")!;
+
+      // Entry A: has a value for the color field
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota", [String(colorField.id)]: "Red" },
+        "editor1"
+      );
+
+      // Entry B: no value for the color field
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda" },
+        "editor1"
+      );
+
+      // Make color required (breaking) → Entry B is conflicted
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: colorField.id, label: "color", type: "text", required: true },
+      ], "editor1");
+
+      expect(
+        contentService.listForSchema("car").find((e) => e.id === entryB.id)
+          ?.conflict
+      ).toBe(true);
+
+      // Delete the color field → Entry B should be deconflicted
+      schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+      ], "editor1");
+
+      // Entry B was conflicted because color became required; now color is
+      // deleted → deconflicted (schema_version bumped to new version).
+      const entryBAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryB.id) as { schema_version: number };
+      expect(entryBAfter.schema_version).toBe(3);
+
+      expect(
+        contentService.listForSchema("car").find((e) => e.id === entryB.id)
+          ?.conflict
+      ).toBe(false);
+    });
+
     it("combined changes: type change + deletion affects all entries with any stored value", () => {
       const db = openDatabase();
       const schemaService = new SchemaService(db);
