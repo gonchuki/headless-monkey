@@ -593,18 +593,15 @@ describe("Schema Routes", () => {
         { label: "color", type: "text", required: false },
       ], "editor1");
 
-      // Create content entry
+      // Create content entry with no value for the optional color field
       const insertResult = db.prepare(
         `INSERT INTO content (schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by) VALUES (?, ?, ?, ?, ?, ?)`
-      ).run("car", 2, new Date().toISOString(), "editor1", new Date().toISOString(), "editor1");
+      ).run("car", 1, new Date().toISOString(), "editor1", new Date().toISOString(), "editor1");
       const entryId = insertResult.lastInsertRowid;
 
       db.prepare(
         `INSERT INTO content_rows (content_id, field_id, value) VALUES (?, ?, ?)`
       ).run(entryId, 1, '"Toyota"');
-      db.prepare(
-        `INSERT INTO content_rows (content_id, field_id, value) VALUES (?, ?, ?)`
-      ).run(entryId, 2, '"Red"');
 
       // Delete the color field
       await request(app)
@@ -613,18 +610,57 @@ describe("Schema Routes", () => {
           fields: [{ id: 1, label: "make", type: "text", required: true }],
         });
 
-      // Verify content_rows for field_id=2 are gone
-      const remainingRows = db
-        .prepare(`SELECT * FROM content_rows WHERE content_id = ?`)
-        .all(entryId);
-      expect(remainingRows.length).toBe(1);
-      expect((remainingRows[0] as any).field_id).toBe(1);
-
-      // Verify schema_version was bumped
+      // Verify schema_version was bumped (entry had no value for deleted field)
       const entry = db
         .prepare(`SELECT schema_version FROM content WHERE id = ?`)
         .get(entryId) as { schema_version: number };
       expect(entry.schema_version).toBe(2);
+    });
+
+    it("selective bump: only unaffected entries get schema_version bumped", async () => {
+      const { app, schemaService, db } = createTestApp();
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "color", type: "text", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const colorField = schema.fields.find((f) => f.label === "color")!;
+
+      // Entry with a value for the deleted field → affected
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota", [String(colorField.id)]: "Red" },
+        "editor1"
+      );
+
+      // Entry without a value for the deleted field → unaffected
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda" },
+        "editor1"
+      );
+
+      await request(app)
+        .patch("/api/schemas/car")
+        .send({
+          fields: [{ id: makeField.id, label: "make", type: "text", required: true }],
+        });
+
+      // Entry A: affected → not bumped
+      const entryAAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryA.id) as { schema_version: number };
+      expect(entryAAfter.schema_version).toBe(1);
+
+      // Entry B: unaffected → bumped
+      const entryBAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryB.id) as { schema_version: number };
+      expect(entryBAfter.schema_version).toBe(2);
     });
   });
 
