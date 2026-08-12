@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useReducer, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "@phosphor-icons/react";
-import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { PageSkeleton } from "@/components/shared/PageSkeleton";
+import { PendingDeletionBanner } from "@/components/PendingDeletionBanner";
 import { SchemaFieldGrid } from "@/components/SchemaFieldGrid";
 import { SchemaSaveConfirmDialog } from "@/components/SchemaSaveConfirmDialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/toast";
+import { useEntries } from "@/hooks/useEntries";
 import { useRealtime } from "@/hooks/useRealtime";
 import {
   useSchemaEntryCount,
@@ -37,6 +38,8 @@ type EditorAction =
   | { type: "UPDATE_FIELD"; index: number; patch: Partial<Omit<SchemaDraft, "id">> }
   | { type: "ADD_FIELD" }
   | { type: "REMOVE_FIELD"; index: number }
+  | { type: "MARK_FIELD_DELETED"; index: number }
+  | { type: "RESTORE_FIELD"; index: number }
   | { type: "MOVE_FIELD"; from: number; to: number };
 
 const initialState: EditorState = {
@@ -83,6 +86,16 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
       };
     case "REMOVE_FIELD":
       return { ...state, fields: state.fields.filter((_, index) => index !== action.index) };
+    case "MARK_FIELD_DELETED":
+      return {
+        ...state,
+        fields: state.fields.map((field, index) => (index === action.index ? { ...field, deleted: true } : field)),
+      };
+    case "RESTORE_FIELD":
+      return {
+        ...state,
+        fields: state.fields.map((field, index) => (index === action.index ? { ...field, deleted: false } : field)),
+      };
     case "MOVE_FIELD": {
       const fields = [...state.fields];
       const [moved] = fields.splice(action.from, 1);
@@ -95,10 +108,22 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
 }
 
 function toPayload(fields: SchemaDraft[]): SchemaFieldInput[] {
-  return fields.map((field) => {
-    const { id, ...rest } = field;
-    return id !== undefined && id > 0 ? { id, ...rest } : rest;
-  });
+  return fields
+    .filter((field) => !field.deleted)
+    .map((field) => {
+      const payload: SchemaFieldInput = {
+        label: field.label,
+        type: field.type,
+        required: field.required,
+      };
+      if (field.ref_schema != null) {
+        payload.ref_schema = field.ref_schema;
+      }
+      if (field.id != null && field.id > 0) {
+        payload.id = field.id;
+      }
+      return payload;
+    });
 }
 
 function errorMessage(error: unknown): string | undefined {
@@ -118,7 +143,6 @@ export default function SchemaEditorPage() {
 
   const { listQuery, create, update } = useSchemas();
   const [state, dispatch] = useReducer(editorReducer, initialState);
-  const [fieldToDelete, setFieldToDelete] = useState<number | null>(null);
   const [pendingSave, setPendingSave] = useState<{ fields: SchemaFieldInput[] } | null>(null);
 
   // Live stream: only schema events affect the schema editor view.
@@ -131,6 +155,7 @@ export default function SchemaEditorPage() {
   const isCreate = isCreateRoute;
   const schemaMissing = !isCreateRoute && schemaQuery.isError;
   const deleted = !isCreateRoute && deletedSchemas.has(name);
+  const entriesSchemaName = isCreateRoute ? "" : name;
 
   useEffect(() => {
     dispatch({ type: "RESET", name: isCreateRoute ? "" : name });
@@ -183,8 +208,22 @@ export default function SchemaEditorPage() {
     .map((schema) => schema.name)
     .filter((schemaName) => schemaName !== state.name);
 
-  const fieldDeleteCount = useSchemaEntryCount(name, fieldToDelete != null && !isCreate);
-  const affectedFieldCount = isCreate ? 0 : fieldDeleteCount.data;
+  const activeFields = state.fields.filter((field) => !field.deleted);
+  const tombstonedFields = state.fields.filter((field) => field.deleted);
+  const hasTombstones = tombstonedFields.length > 0;
+
+  const entryCountQuery = useSchemaEntryCount(entriesSchemaName, hasTombstones && !deleted);
+  const { listQuery: entriesListQuery } = useEntries(entriesSchemaName);
+
+  const saveBlockReason =
+    hasTombstones && activeFields.length === 0
+      ? "This schema needs at least one field — restore a field to save."
+      : hasTombstones && activeFields.some((field) => field.label.trim() === "")
+        ? "A field label is empty — fill it in or restore a field to save."
+        : hasTombstones && !activeFields.some((field) => field.required)
+          ? "A schema needs at least one required field — restore a field to save."
+          : null;
+
   const pending = isCreate ? create.isPending : update.isPending;
   const saveError = isCreate ? create.error : update.error;
 
@@ -209,9 +248,9 @@ export default function SchemaEditorPage() {
   }
 
   function handleSave() {
-    if (state.fields.length === 0) return;
-    if (state.fields.some((field) => field.label.trim() === "")) return;
-    if (!state.fields.some((field) => field.required)) return;
+    if (activeFields.length === 0) return;
+    if (activeFields.some((field) => field.label.trim() === "")) return;
+    if (!activeFields.some((field) => field.required)) return;
     const fields = toPayload(state.fields);
 
     if (isCreate) {
@@ -272,10 +311,10 @@ export default function SchemaEditorPage() {
   }
 
   const canSave =
-    state.fields.length === 0 ||
+    activeFields.length === 0 ||
     (isCreate && state.name.trim() === "") ||
-    state.fields.some((field) => field.label.trim() === "") ||
-    !state.fields.some((field) => field.required) ||
+    activeFields.some((field) => field.label.trim() === "") ||
+    !activeFields.some((field) => field.required) ||
     pending ||
     deleted;
 
@@ -330,6 +369,16 @@ export default function SchemaEditorPage() {
         {!isCreate && <p className="text-xs text-muted-foreground">Schema names cannot be renamed after creation.</p>}
       </div>
 
+      {!isCreate && !deleted && hasTombstones && (
+        <PendingDeletionBanner
+          deletedFields={tombstonedFields}
+          entryCount={entryCountQuery.data}
+          entries={entriesListQuery.data}
+          entriesPending={entriesListQuery.isPending}
+          blockReason={saveBlockReason}
+        />
+      )}
+
       <SchemaFieldGrid
         fields={state.fields}
         refSchemas={refSchemas}
@@ -343,40 +392,11 @@ export default function SchemaEditorPage() {
             dispatch({ type: "REMOVE_FIELD", index });
             return;
           }
-          setFieldToDelete(index);
+          dispatch({ type: "MARK_FIELD_DELETED", index });
         }}
+        onRestoreField={(index) => dispatch({ type: "RESTORE_FIELD", index })}
         onMoveUp={handleMoveUp}
         onMoveDown={handleMoveDown}
-      />
-
-      <DeleteConfirmDialog
-        open={fieldToDelete != null}
-        onOpenChange={(open) => {
-          if (!open) setFieldToDelete(null);
-        }}
-        title="Delete field?"
-        description={
-          fieldToDelete != null && (
-            <>
-              Delete the field{" "}
-              <span className="font-medium text-foreground">{state.fields[fieldToDelete]?.label || "Unnamed"}</span>? Its
-              stored values are removed from this schema&apos;s content.
-              <span className="mt-1 block">
-                {affectedFieldCount == null
-                  ? "Counting affected entries…"
-                  : `This affects ${affectedFieldCount} ${affectedFieldCount === 1 ? "entry" : "entries"}.`}
-              </span>
-            </>
-          )
-        }
-        confirmLabel="Delete field"
-        pending={false}
-        onConfirm={() => {
-          if (fieldToDelete != null) {
-            dispatch({ type: "REMOVE_FIELD", index: fieldToDelete });
-          }
-          setFieldToDelete(null);
-        }}
       />
 
       <SchemaSaveConfirmDialog

@@ -15,6 +15,8 @@ export interface SchemaDraft {
   type: FieldType;
   required: boolean;
   ref_schema?: string;
+  /** True while the field is staged for deletion in the draft (not yet saved). */
+  deleted?: boolean;
 }
 
 export function useSchemas() {
