@@ -1,6 +1,10 @@
 import type { Db } from "../db/database";
 import { ContentRepository, ContentEntryRow } from "../repositories/contentRepo";
 import { SchemaRepository } from "../repositories/schemaRepo";
+import {
+  coerceScalarValue,
+  isScalarValueValid,
+} from "./fieldValidation";
 import type {
   FieldInput,
   FieldWithId,
@@ -167,7 +171,6 @@ export class SchemaService {
       compatVersion,
       deletedFieldIds,
       retargetedFieldIds,
-      affectedEntryIds,
     } = this.validateAndComputeUpdate(name, fields);
 
     const entries = this.contentRepo.listEntries(name);
@@ -176,8 +179,7 @@ export class SchemaService {
       fields,
       entries,
       deletedFieldIds,
-      retargetedFieldIds,
-      affectedEntryIds
+      retargetedFieldIds
     );
 
     return {
@@ -199,7 +201,6 @@ export class SchemaService {
     deletedFieldIds: number[];
     retargetedFieldIds: number[];
     unaffectedEntryIds: number[];
-    affectedEntryIds: Set<number>;
   } {
     const existing = this.repo.getSchema(name);
     if (!existing) {
@@ -311,15 +312,12 @@ export class SchemaService {
     }
 
     const entries = this.contentRepo.listEntries(name);
-    const { affectedEntryIds, unaffectedEntryIds } =
-      this.computeAffectedAndUnaffected(
-        existing,
-        fields,
-        entries,
-        deletedFieldIds,
-        retargetedFieldIds,
-        existing.compat_version
-      );
+    const unaffectedEntryIds = this.computeUnaffectedEntryIds(
+      fields,
+      entries,
+      deletedFieldIds,
+      retargetedFieldIds
+    );
 
     return {
       existing,
@@ -329,50 +327,26 @@ export class SchemaService {
       deletedFieldIds,
       retargetedFieldIds,
       unaffectedEntryIds,
-      affectedEntryIds,
     };
   }
 
-  private computeAffectedAndUnaffected(
-    existing: SchemaEntry,
+  /**
+   * Compute which entries are compatible with the new schema shape and should
+   * have their schema_version bumped. This validation is the single source of
+   * truth for deconfliction — it replaces all prior heuristics (required→
+   * optional, deleted-required, type-change-then-delete, etc.). An entry is
+   * bumped iff its stored data satisfies the new field definitions.
+   */
+  private computeUnaffectedEntryIds(
     fields: (FieldInput & { id?: number })[],
     entries: ContentEntryRow[],
     deletedFieldIds: number[],
-    retargetedFieldIds: number[],
-    currentCompatVersion: number
-  ): {
-    affectedEntryIds: Set<number>;
-    unaffectedEntryIds: number[];
-  } {
-    const affectedEntryIds = new Set<number>();
+    retargetedFieldIds: number[]
+  ): number[] {
     const unaffectedEntryIds: number[] = [];
 
     const deletedIds = new Set(deletedFieldIds);
     const retargetedIds = new Set(retargetedFieldIds);
-    const incomingById = new Map<number, FieldInput & { id?: number }>();
-    // Track fields going required→optional — entries missing a value for such
-    // a field should be deconflicted (their conflict was caused by this field
-    // becoming required; making it optional resolves that conflict).
-    const requiredToOptionalIds = new Set<number>();
-    let hasNewRequiredField = false;
-    for (const f of fields) {
-      if (typeof f.id === "number") {
-        incomingById.set(f.id, f);
-      } else if (f.required) {
-        hasNewRequiredField = true;
-      }
-    }
-    for (const oldField of existing.fields) {
-      const incoming = incomingById.get(oldField.id);
-      if (incoming && oldField.required && !incoming.required) {
-        requiredToOptionalIds.add(oldField.id);
-      }
-    }
-    // Deleted fields that were required: entries with no stored value were
-    // affected by the required constraint; deleting the field removes it.
-    const deletedRequiredIds = existing.fields
-      .filter((f) => deletedIds.has(f.id) && f.required)
-      .map((f) => f.id);
 
     for (const entry of entries) {
       const rowsById = new Map<number, unknown>();
@@ -383,97 +357,87 @@ export class SchemaService {
       for (const ref of entry.refs) {
         refsById.set(ref.field_id, ref.target_content_id);
       }
-      const hasStoredValue = (id: number): boolean =>
-        rowsById.has(id) || refsById.has(id);
 
-      // Track incompatibility separately from deletion effects. Deletions
-      // remove constraints (entry becomes compatible), while type changes
-      // and optional→required create incompatibilities (entry stays behind).
-      let isAffectedByIncompatibility = false;
-      let hasDeletedStoredValue = false;
+      const compatible = this.validateEntryAgainstFields(
+        rowsById,
+        refsById,
+        fields,
+        deletedIds,
+        retargetedIds
+      );
 
-      for (const oldField of existing.fields) {
-        const id = oldField.id;
-
-        if (deletedIds.has(id)) {
-          // Field deleted: track whether entry had data (for preview), but
-          // don't mark as incompatible — the constraint is gone.
-          if (hasStoredValue(id)) {
-            hasDeletedStoredValue = true;
-          }
-          continue;
-        }
-
-        const incoming = incomingById.get(id);
-        if (!incoming) continue;
-
-        // Kept field: number→text is lossless (R13/R17) → never affected.
-        if (oldField.type === "number" && incoming.type === "text") continue;
-
-        // Kept field, any other type change: affected iff a value is stored.
-        if (oldField.type !== incoming.type) {
-          if (hasStoredValue(id)) {
-            isAffectedByIncompatibility = true;
-          }
-          continue;
-        }
-
-        // Kept schema-ref field whose ref_schema changed (retarget): affected
-        // iff the entry holds a ref for the field.
-        if (retargetedIds.has(id)) {
-          if (refsById.has(id)) {
-            isAffectedByIncompatibility = true;
-          }
-          continue;
-        }
-
-        // Kept field, type + ref_schema unchanged, optional→required: affected
-        // iff the entry has no stored value, or the stored value is invalid
-        // under required semantics (the only such case: text `""`).
-        if (!oldField.required && incoming.required) {
-          if (!hasStoredValue(id) || rowsById.get(id) === "") {
-            isAffectedByIncompatibility = true;
-          }
-          continue;
-        }
-
-        // Everything else (required→optional, label rename, reorder): never
-        // affected.
-      }
-
-      if (hasNewRequiredField) isAffectedByIncompatibility = true;
-
-      if (isAffectedByIncompatibility || hasDeletedStoredValue) {
-        // Entry is incompatible with the new schema shape, or lost data from
-        // deletions — keep it conflicted.
-        affectedEntryIds.add(entry.record.id);
-      } else {
-        // Entry is unaffected by non-deletion changes and has no deleted data.
-        // If it was previously conflicted, check if required→optional or
-        // deletion of required field resolves its conflict.
-        if (entry.record.schema_version < currentCompatVersion) {
-          const deconflicted =
-            // Deletion of required field: entry had no value → was affected
-            // by the required constraint; constraint is now gone.
-            deletedRequiredIds.some((id) => !hasStoredValue(id)) ||
-            // required→optional: entry had no value → was affected by the
-            // required constraint; constraint is now relaxed.
-            [...requiredToOptionalIds].some(
-              (id) => !hasStoredValue(id)
-            );
-          if (deconflicted) {
-            unaffectedEntryIds.push(entry.record.id);
-          } else {
-            // Previously conflicted — keep it conflicted.
-            affectedEntryIds.add(entry.record.id);
-          }
-        } else {
-          unaffectedEntryIds.push(entry.record.id);
-        }
+      if (compatible) {
+        unaffectedEntryIds.push(entry.record.id);
       }
     }
 
-    return { affectedEntryIds, unaffectedEntryIds };
+    return unaffectedEntryIds;
+  }
+
+  /**
+   * Validate whether an entry's stored data is compatible with the given
+   * schema field definitions. Simulates the post-update state: deleted fields
+   * are ignored (their data will be removed), retargeted refs are treated as
+   * purged. Returns true if the entry satisfies every field constraint.
+   */
+  private validateEntryAgainstFields(
+    rowsById: Map<number, unknown>,
+    refsById: Map<number, number>,
+    fields: (FieldInput & { id?: number })[],
+    deletedFieldIds: Set<number>,
+    retargetedFieldIds: Set<number>
+  ): boolean {
+    for (const field of fields) {
+      // New field (no id yet): if required, the entry cannot have a value.
+      if (typeof field.id !== "number") {
+        if (field.required) return false;
+        continue;
+      }
+
+      const id = field.id;
+
+      // Deleted field: constraint is gone, skip.
+      if (deletedFieldIds.has(id)) continue;
+
+      if (field.type === "schema-ref") {
+        // Retargeted refs are purged → treat as no value.
+        const hasRef = retargetedFieldIds.has(id) ? false : refsById.has(id);
+        if (field.required && !hasRef) return false;
+        // A scalar row on a schema-ref field is invalid data (e.g. left over
+        // from a type flip). Refs must also point at an entry that exists in
+        // the declared ref_schema, otherwise the entry is conflicted.
+        if (rowsById.has(id)) return false;
+        if (hasRef && field.ref_schema) {
+          const targetId = refsById.get(id)!;
+          if (!this.contentRepo.entryExistsInSchema(targetId, field.ref_schema)) {
+            return false;
+          }
+        }
+        continue;
+      }
+
+      // Scalar field.
+      const hasRow = rowsById.has(id);
+      // A ref stored on a scalar field is invalid data (e.g. a stale ref left
+      // behind when a schema-ref field was flipped to a scalar type).
+      if (refsById.has(id)) return false;
+      if (field.required && !hasRow) return false;
+
+      if (hasRow) {
+        const value = rowsById.get(id);
+        if (!isScalarValueValid(field.type, field.required, value)) {
+          // Try the only coercion rule (number→text, R13/R17).
+          const coerced = coerceScalarValue(field.type, value);
+          if (
+            coerced === null ||
+            !isScalarValueValid(field.type, field.required, coerced)
+          ) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
   }
 
   delete(name: string): void {
@@ -659,8 +623,7 @@ export class SchemaService {
     fields: (FieldInput & { id?: number })[],
     entries: ContentEntryRow[],
     deletedFieldIds: number[],
-    retargetedFieldIds: number[],
-    affectedEntryIds: Set<number>
+    retargetedFieldIds: number[]
   ): SchemaUpdatePreviewEntry[] {
     const deletedIds = new Set(deletedFieldIds);
     const retargetedIds = new Set(retargetedFieldIds);

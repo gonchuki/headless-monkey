@@ -617,7 +617,7 @@ describe("Schema Routes", () => {
       expect(entry.schema_version).toBe(2);
     });
 
-    it("selective bump: only unaffected entries get schema_version bumped", async () => {
+    it("selective bump: entries compatible with the remaining schema get bumped", async () => {
       const { app, schemaService, db } = createTestApp();
       const contentService = new ContentService(db);
 
@@ -630,14 +630,14 @@ describe("Schema Routes", () => {
       const makeField = schema.fields.find((f) => f.label === "make")!;
       const colorField = schema.fields.find((f) => f.label === "color")!;
 
-      // Entry with a value for the deleted field → affected
+      // Entry with a value for the deleted field (will be removed)
       const entryA = contentService.create(
         "car",
         { [String(makeField.id)]: "Toyota", [String(colorField.id)]: "Red" },
         "editor1"
       );
 
-      // Entry without a value for the deleted field → unaffected
+      // Entry without a value for the deleted field
       const entryB = contentService.create(
         "car",
         { [String(makeField.id)]: "Honda" },
@@ -650,13 +650,14 @@ describe("Schema Routes", () => {
           fields: [{ id: makeField.id, label: "make", type: "text", required: true }],
         });
 
-      // Entry A: affected → not bumped
+      // Validation-based bump: both entries are compatible with the remaining
+      // schema (make is required, both have it). Entry A lost its color value
+      // but is still compatible → bumped.
       const entryAAfter = db
         .prepare(`SELECT schema_version FROM content WHERE id = ?`)
         .get(entryA.id) as { schema_version: number };
-      expect(entryAAfter.schema_version).toBe(1);
+      expect(entryAAfter.schema_version).toBe(2);
 
-      // Entry B: unaffected → bumped
       const entryBAfter = db
         .prepare(`SELECT schema_version FROM content WHERE id = ?`)
         .get(entryB.id) as { schema_version: number };
