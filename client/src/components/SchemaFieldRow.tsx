@@ -49,10 +49,14 @@ export function SchemaFieldRow({
   const inert = disabled || deleted;
 
   return (
-    <li className={cn("border-b p-3 last:border-b-0", deleted && "bg-muted/30")}>
+    <li className={cn("border-b p-3 last:border-b-0", deleted && "bg-muted/30", (field.id! <= -1) && "bg-green-100/30")}>
       <div className={FIELD_GRID_TEMPLATE}>
-        <Select value={field.type} disabled={inert} onValueChange={(value) => onChange(index, { type: value as FieldType })}>
-          <SelectTrigger className="w-full" aria-label={`Field ${index + 1} type`}>
+        <Select
+          value={field.type}
+          disabled={inert}
+          onValueChange={(value) => onChange(index, { type: value as FieldType })}
+        >
+          <SelectTrigger className="w-full bg-background" aria-label={`Field ${index + 1} type`}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -66,7 +70,7 @@ export function SchemaFieldRow({
         <Input
           value={field.label}
           disabled={inert}
-          className={cn(deleted && "line-through")}
+          className={cn(deleted && "line-through", "bg-background")}
           onChange={(event) => onChange(index, { label: event.target.value })}
           aria-label={`Field ${index + 1} label`}
           placeholder="Field label"
@@ -98,7 +102,7 @@ export function SchemaFieldRow({
           >
             <ArrowDown className="size-4" aria-hidden="true" />
           </Button>
-          {!deleted && (
+          {!deleted ? (
             <Button
               type="button"
               variant="ghost"
@@ -109,19 +113,16 @@ export function SchemaFieldRow({
             >
               <Trash className="size-4" aria-hidden="true" />
             </Button>
+          ) : (
+            onRestore != null && (
+              <Button type="button" variant="ghost" size="icon-sm" onClick={() => onRestore(index)}>
+                <ArrowCounterClockwise className="size-3.5" aria-hidden="true" />
+              </Button>
+            )
           )}
         </div>
       </div>
-      {deleted ? (
-        onRestore != null && (
-          <div className="mt-2 flex">
-            <Button type="button" variant="outline" size="sm" onClick={() => onRestore(index)}>
-              <ArrowCounterClockwise className="size-3.5" aria-hidden="true" />
-              Undo delete
-            </Button>
-          </div>
-        )
-      ) : field.type === "schema-ref" ? (
+      {!deleted && field.type === "schema-ref" ? (
         <div className="mt-2 grid gap-1.5">
           <Label htmlFor={`field-${index}-ref`}>Referenced schema</Label>
           <Select
