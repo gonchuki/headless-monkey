@@ -73,15 +73,29 @@ export class ContentService {
     createdBy: string
   ): ContentEntry {
     const schema = this.requireSchema(schemaName);
-    const built = this.buildRows(schema, null, values);
-    const id = this.repo.insert(
-      schema.name,
-      schema.version,
-      createdBy,
-      built.rows,
-      built.refs
-    );
-    return this.toEntry(this.requireEntry(id), schema, false, "editor");
+    // Wrap validation + insert in one transaction so a concurrent DELETE of a
+    // schema-ref target cannot slip between entryExistsInSchema and the FK check.
+    return this.db.transaction(() => {
+      try {
+        const built = this.buildRows(schema, null, values);
+        const id = this.repo.insert(
+          schema.name,
+          schema.version,
+          createdBy,
+          built.rows,
+          built.refs
+        );
+        return this.toEntry(this.requireEntry(id), schema, false, "editor");
+      } catch (err) {
+        // If the FK constraint fires (target deleted between validation and insert),
+        // better-sqlite3 throws a SqliteError. Convert to 422 so the route handler
+        // returns a proper error instead of 500.
+        if (typeof err === "object" && err !== null && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.includes("FOREIGN KEY")) {
+          throw new ContentServiceError(422, `Schema-ref target entry no longer exists`);
+        }
+        throw err;
+      }
+    })();
   }
 
   update(
