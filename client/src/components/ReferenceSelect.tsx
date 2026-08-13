@@ -13,6 +13,12 @@ import { queryKeys } from "@/lib/query";
 
 const EMPTY_OPTION = "__none__";
 
+function placeholderText(entries: ContentListEntry[], validEntries: ContentListEntry[]): string {
+  if (entries.length === 0) return "No entries to reference";
+  if (validEntries.length === 0) return "All entries conflicted";
+  return "Select an entry";
+}
+
 export interface ReferenceSelectProps {
   field: SchemaField;
   value: ContentValue | null;
@@ -48,14 +54,15 @@ export function ReferenceSelect({
 
   const labelFieldId = schemaQuery.data ? schemaLabelField(schemaQuery.data) : null;
   const entries = entriesQuery.data ?? [];
+  const validEntries = entries.filter((entry) => !entry.conflict);
 
   return (
     <Select
       value={typeof value === "number" ? String(value) : field.required ? null : EMPTY_OPTION}
       onValueChange={(selected) => onChange(selected === EMPTY_OPTION ? null : Number(selected))}
     >
-      <SelectTrigger disabled={disabled || (field.required && entries.length === 0)} aria-invalid={invalid}>
-        <SelectValue placeholder={entries.length === 0 ? "No entries to reference" : "Select an entry"}>
+      <SelectTrigger disabled={disabled || (field.required && validEntries.length === 0)} aria-invalid={invalid}>
+        <SelectValue placeholder={placeholderText(entries, validEntries)}>
           {(selectedValue) => {
             if (selectedValue === EMPTY_OPTION) {
               return "[empty]";
@@ -67,7 +74,7 @@ export function ReferenceSelect({
       </SelectTrigger>
       <SelectContent>
         {!field.required && <SelectItem value={EMPTY_OPTION}>[empty]</SelectItem>}
-        {entries.map((entry) => (
+        {validEntries.map((entry) => (
           <SelectItem key={entry.id} value={String(entry.id)}>
             {entryLabel(entry, labelFieldId)}
           </SelectItem>
