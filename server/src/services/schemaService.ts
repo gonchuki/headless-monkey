@@ -512,20 +512,25 @@ export class SchemaService {
     targetSchema: string,
     fields: FieldInput[]
   ): void {
-    // Build the graph including the pending changes
-    const graph = this.repo.getRefGraph();
-
-    // Add the pending schema's refs to the graph
-    const pendingRefs: string[] = [];
+    // Extract incoming refs from the fields parameter
+    const incomingRefs: string[] = [];
     for (const f of fields) {
       if (f.type === "schema-ref" && f.ref_schema) {
-        pendingRefs.push(f.ref_schema);
+        incomingRefs.push(f.ref_schema);
       }
     }
 
-    // Check if following refs from targetSchema leads back to targetSchema
+    // Rebuild the reference graph to reflect the post-update state:
+    // start with the live DB graph, then replace the target schema's
+    // outgoing edges with the incoming refs. This handles create (no
+    // existing edges), update with retarget (old edges replaced), and
+    // update adding/deleting fields (incoming refs are the final state).
+    const graph = this.repo.getRefGraph();
+    graph.set(targetSchema, [...incomingRefs]);
+
+    // Walk from the incoming refs to detect cycles back to targetSchema.
     const visited = new Set<string>();
-    const stack = [...pendingRefs];
+    const stack = [...incomingRefs];
 
     while (stack.length > 0) {
       const current = stack.pop()!;
