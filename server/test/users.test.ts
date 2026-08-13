@@ -42,7 +42,7 @@ describe("Users routes (admin only)", () => {
 
     it("returns 403 for editor token (R5)", async () => {
       const { app } = createTestApp();
-      const editorJwt = jwt.sign({ sub: "editor1", role: "editor" }, "test-secret");
+      const editorJwt = jwt.sign({ sub: "editor1", role: "editor" }, "test-secret", { expiresIn: "8h" });
       const res = await request(app)
         .get("/api/users")
         .set("Authorization", `Bearer ${editorJwt}`);
