@@ -1,5 +1,15 @@
 import type { Db } from "../db/database";
-import type { FieldInput, FieldWithId, SchemaEntry, SchemaListEntry } from "../types";
+import type { FieldInput, FieldWithId, SchemaEntry } from "../types";
+
+export interface SchemaFullMetadata {
+  name: string;
+  version: number;
+  compat_version: number;
+  creation_date: string;
+  created_by: string;
+  last_modified_date: string;
+  last_modified_by: string;
+}
 
 export class SchemaRepository {
   private db: Db;
@@ -89,10 +99,51 @@ export class SchemaRepository {
     };
   }
 
-  listSchemas(): SchemaListEntry[] {
+  listSchemas(): SchemaFullMetadata[] {
     return this.db.prepare(
-      "SELECT s.name, s.version, s.compat_version, (SELECT COUNT(*) FROM schema_fields sf WHERE sf.schema = s.name) as field_count, (SELECT COUNT(*) FROM content c WHERE c.schema = s.name) as entry_count FROM schemas s ORDER BY s.name"
-    ).all() as SchemaListEntry[];
+      "SELECT name, version, compat_version, creation_date, created_by, last_modified_date, last_modified_by FROM schemas ORDER BY name"
+    ).all() as SchemaFullMetadata[];
+  }
+
+  /**
+   * Fetch fields for multiple schemas in a single query.
+   * Returns a Map from schema name to its fields array.
+   * Schemas with no fields will not appear in the map.
+   */
+  getFieldsForSchemas(schemaNames: string[]): Map<string, FieldWithId[]> {
+    if (schemaNames.length === 0) return new Map();
+
+    const placeholders = schemaNames.map(() => "?").join(", ");
+    const rawFields = this.db
+      .prepare(
+        `SELECT schema, id, label, type, required, ref_schema, sort_order FROM schema_fields WHERE schema IN (${placeholders}) ORDER BY schema, sort_order`
+      )
+      .all(...schemaNames) as Array<{
+        schema: string;
+        id: number;
+        label: string;
+        type: string;
+        required: number;
+        ref_schema: string | null;
+        sort_order: number;
+      }>;
+
+    const result = new Map<string, FieldWithId[]>();
+    for (const f of rawFields) {
+      if (!result.has(f.schema)) {
+        result.set(f.schema, []);
+      }
+      result.get(f.schema)!.push({
+        id: f.id,
+        label: f.label,
+        type: f.type as FieldInput["type"],
+        required: Boolean(f.required),
+        ref_schema: f.ref_schema ?? undefined,
+        sort_order: f.sort_order,
+      });
+    }
+
+    return result;
   }
 
   schemaExists(name: string): boolean {
