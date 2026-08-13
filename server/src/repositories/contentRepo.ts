@@ -162,19 +162,46 @@ export class ContentRepository {
       )
       .all(schema) as ContentRecord[];
 
-    return records.map((record) => {
-      const rows = this.db
-        .prepare(
-          "SELECT field_id, value FROM content_rows WHERE content_id = ? ORDER BY field_id"
-        )
-        .all(record.id) as ContentRow[];
-      const refs = this.db
-        .prepare(
-          "SELECT field_id, target_content_id FROM content_refs WHERE content_id = ? ORDER BY field_id"
-        )
-        .all(record.id) as ContentRef[];
-      return { record, rows, refs };
-    });
+    if (records.length === 0) return [];
+
+    const ids = records.map((r) => r.id);
+    const placeholders = ids.map(() => "?").join(",");
+
+    const allRows = this.db
+      .prepare(
+        `SELECT content_id, field_id, value FROM content_rows WHERE content_id IN (${placeholders}) ORDER BY content_id, field_id`
+      )
+      .all(...ids) as (ContentRow & { content_id: number })[];
+
+    const allRefs = this.db
+      .prepare(
+        `SELECT content_id, field_id, target_content_id FROM content_refs WHERE content_id IN (${placeholders}) ORDER BY content_id, field_id`
+      )
+      .all(...ids) as (ContentRef & { content_id: number })[];
+
+    const rowsByContentId = new Map<number, ContentRow[]>();
+    for (const row of allRows) {
+      const { content_id, ...rest } = row;
+      if (!rowsByContentId.has(content_id)) {
+        rowsByContentId.set(content_id, []);
+      }
+      rowsByContentId.get(content_id)!.push(rest);
+    }
+
+    const refsByContentId = new Map<number, ContentRef[]>();
+    for (const ref of allRefs) {
+      const { content_id, ...rest } = ref;
+      if (!refsByContentId.has(content_id)) {
+        refsByContentId.set(content_id, []);
+      }
+      refsByContentId.get(content_id)!.push(rest);
+    }
+
+    return records.map((record) => ({
+      record,
+      rows: rowsByContentId.get(record.id) ?? [],
+      refs: refsByContentId.get(record.id) ?? [],
+    }));
   }
 
   entryExistsInSchema(id: number, schema: string): boolean {
