@@ -89,20 +89,26 @@ export class ContentService {
     values: Record<string, unknown>,
     modifiedBy: string
   ): ContentEntry {
-    const existing = this.repo.getEntry(entryId);
-    if (!existing) {
-      throw new ContentServiceError(404, `Entry ${entryId} not found`);
-    }
-    const schema = this.requireSchema(existing.record.schema);
-    const built = this.buildRows(schema, existing, values);
-    this.repo.replaceRows(
-      entryId,
-      schema.version,
-      modifiedBy,
-      built.rows,
-      built.refs
-    );
-    return this.toEntry(this.requireEntry(entryId), schema, false, "editor");
+    // Wrap read + validate + write in one transaction so a concurrent PATCH
+    // cannot interleave between getEntry and replaceRows (TOCTOU lost-update).
+    // better-sqlite3 serializes transactions: the second caller blocks until
+    // the first commits, then re-reads the fresh state.
+    return this.db.transaction(() => {
+      const existing = this.repo.getEntry(entryId);
+      if (!existing) {
+        throw new ContentServiceError(404, `Entry ${entryId} not found`);
+      }
+      const schema = this.requireSchema(existing.record.schema);
+      const built = this.buildRows(schema, existing, values);
+      this.repo.replaceRows(
+        entryId,
+        schema.version,
+        modifiedBy,
+        built.rows,
+        built.refs
+      );
+      return this.toEntry(this.requireEntry(entryId), schema, false, "editor");
+    })();
   }
 
   delete(entryId: number): void {
