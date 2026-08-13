@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import type { ContentService, ContentEntry, ContentValue } from "../services/contentService";
 import type { SchemaEntry } from "../types";
+import { validateNumericParam } from "./paramValidation";
 
 interface ServiceError {
   statusCode: number;
@@ -91,10 +92,10 @@ export function createContentRouter(contentService: ContentService): Router {
     }
   });
 
-  router.get("/:schema/:id", (req: Request, res: Response) => {
+  router.get("/:schema/:id", validateNumericParam("id"), (req: Request, res: Response) => {
     try {
       const schemaName = typeof req.params.schema === "string" ? req.params.schema : "";
-      const id = Number(req.params.id);
+      const id = Number.parseInt(req.params.id as string, 10);
       const schema = contentService.getSchema(schemaName);
       const labelToId = new Map(schema.fields.map((f) => [f.label, f.id]));
       const entry = contentService.getPublic(schemaName, id);

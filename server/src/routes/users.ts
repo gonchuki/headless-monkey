@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { UserRepo } from "../repositories/userRepo";
 import { UserService } from "../services/userService";
 import type { Db } from "../db/database";
+import { validateNumericParam } from "./paramValidation";
 
 export function createUsersRouter(db: Db): Router {
   const router: Router = Router();
@@ -34,9 +35,9 @@ export function createUsersRouter(db: Db): Router {
     }
   });
 
-  router.patch("/:id", async (req: Request, res: Response) => {
+  router.patch("/:id", validateNumericParam("id"), async (req: Request, res: Response) => {
     try {
-      const id = Number(req.params.id);
+      const id = Number.parseInt(req.params.id as string, 10);
       const { password, disabled } = req.body;
       await userService.update(id, { password, disabled });
       const user = userRepo.findById(id);
@@ -53,9 +54,9 @@ export function createUsersRouter(db: Db): Router {
     }
   });
 
-  router.delete("/:id", async (req: Request, res: Response) => {
+  router.delete("/:id", validateNumericParam("id"), async (req: Request, res: Response) => {
     try {
-      const id = Number(req.params.id);
+      const id = Number.parseInt(req.params.id as string, 10);
       await userService.remove(id);
       res.status(204).send();
     } catch (err) {

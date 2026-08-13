@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import type { ContentService } from "../services/contentService";
 import type { EventsEmitter } from "../services/events";
 import type { AuthRequest } from "../auth/requireAuth";
+import { validateNumericParam } from "./paramValidation";
 
 interface ServiceError {
   statusCode: number;
@@ -56,9 +57,9 @@ export function createEntriesRouter(
   });
 
   // Mounted at /api/entries
-  router.patch("/:id", (req: Request, res: Response) => {
+  router.patch("/:id", validateNumericParam("id"), (req: Request, res: Response) => {
     try {
-      const id = Number(req.params.id);
+      const id = Number.parseInt(req.params.id as string, 10);
       const values = req.body.values ?? {};
       const user = (req as AuthRequest).user.login;
       const entry = contentService.update(id, values, user);
@@ -74,9 +75,9 @@ export function createEntriesRouter(
     }
   });
 
-  router.delete("/:id", (req: Request, res: Response) => {
+  router.delete("/:id", validateNumericParam("id"), (req: Request, res: Response) => {
     try {
-      const id = Number(req.params.id);
+      const id = Number.parseInt(req.params.id as string, 10);
       const user = (req as AuthRequest).user.login;
       const existing = contentService.getEntryMeta(id);
       contentService.delete(id);
