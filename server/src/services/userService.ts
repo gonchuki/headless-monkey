@@ -31,14 +31,10 @@ export class UserService {
   }
 
   async create(input: CreateUserInput): Promise<number> {
-    const existing = this.repo.findByLogin(input.login);
-    if (existing) {
-      const err = new Error("Duplicate login") as Error & { statusCode?: number };
-      err.statusCode = 409;
-      throw err;
-    }
+    // Hash password BEFORE entering the transaction (bcrypt is async; better-sqlite3
+    // transactions are synchronous and cannot contain async operations).
     const hashed = await this.hashPassword(input.password);
-    return this.repo.create(input.login, hashed);
+    return this.repo.createIfNotExists(input.login, hashed);
   }
 
   async update(id: number, input: UpdateUserInput): Promise<void> {

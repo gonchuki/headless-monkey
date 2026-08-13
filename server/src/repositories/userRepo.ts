@@ -29,6 +29,22 @@ export class UserRepo {
     return result.lastInsertRowid as number;
   }
 
+  /** Atomically checks for a duplicate login and inserts if absent. Throws 409 on conflict. */
+  createIfNotExists(login: string, hashedPassword: string): number {
+    return this.db.transaction(() => {
+      const existing = this.findByLogin(login);
+      if (existing) {
+        const err = new Error("Duplicate login") as Error & { statusCode?: number };
+        err.statusCode = 409;
+        throw err;
+      }
+      const result = this.db
+        .prepare(`INSERT INTO users (login, hashed_password) VALUES (?, ?)`)
+        .run(login, hashedPassword);
+      return result.lastInsertRowid as number;
+    })();
+  }
+
   updatePassword(id: number, hashedPassword: string): void {
     this.db.prepare(`UPDATE users SET hashed_password = ? WHERE id = ?`).run(hashedPassword, id);
   }
