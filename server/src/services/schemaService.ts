@@ -486,11 +486,24 @@ export class SchemaService {
   }
 
   list(): SchemaEntry[] {
-    const entries = this.repo.listSchemas();
+    const schemas = this.repo.listSchemas();
+    if (schemas.length === 0) return [];
+
+    const schemaNames = schemas.map((s) => s.name);
+    const fieldsBySchema = this.repo.getFieldsForSchemas(schemaNames);
+
     const result: SchemaEntry[] = [];
-    for (const entry of entries) {
-      const schema = this.repo.getSchema(entry.name);
-      if (schema) result.push(schema);
+    for (const schema of schemas) {
+      result.push({
+        name: schema.name,
+        version: schema.version,
+        compat_version: schema.compat_version,
+        creation_date: schema.creation_date,
+        created_by: schema.created_by,
+        last_modified_date: schema.last_modified_date,
+        last_modified_by: schema.last_modified_by,
+        fields: fieldsBySchema.get(schema.name) ?? [],
+      });
     }
     return result;
   }
