@@ -179,6 +179,29 @@ describe("ContentService", () => {
       );
     });
 
+    it("schema-ref FK constraint fires when target is raw-deleted between validation and insert → 422", () => {
+      const { db, schemaService, contentService } = setup();
+      makeSchema(schemaService, "person", [
+        { label: "name", type: "text", required: true },
+      ]);
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+      ]);
+
+      const personEntry = contentService.create("person", { "1": "Alice" }, "editor1");
+
+      // Simulate a concurrent delete: raw DELETE the target entry from the DB,
+      // bypassing the service layer. The FK constraint should fire during insert
+      // and be converted to a 422 instead of a raw 500 SqliteError.
+      db.prepare("DELETE FROM content WHERE id = ?").run(personEntry.id);
+
+      expectStatus(
+        () => contentService.create("car", { "2": "Civic", "3": personEntry.id }, "editor1"),
+        422
+      );
+    });
+
     it("invalid types are rejected → 422", () => {
       const { schemaService, contentService } = setup();
       makeSchema(schemaService, "car", [
