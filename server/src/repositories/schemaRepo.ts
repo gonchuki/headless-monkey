@@ -133,89 +133,96 @@ export class SchemaRepository {
     retargetedFieldIds: number[],
     unaffectedEntryIds: number[]
   ): void {
-    const now = new Date().toISOString();
+    // All writes run inside one transaction so a failure at any step rolls
+    // back the content_refs purge, schema_version bump, field mutations, and
+    // schemas table update atomically.
+    const tx = this.db.transaction(() => {
+      const now = new Date().toISOString();
 
-    // R35: purge content_refs for schema-ref fields whose ref_schema changed.
-    // Scoped to this schema's entries, and runs BEFORE the deleted-fields block
-    // so a mid-edit state never exposes stale targets. No schema_version bump
-    // here: the retarget is already breaking (compat_version above), so the
-    // entries must stay conflicted until an editor re-selects a target.
-    if (retargetedFieldIds.length > 0) {
-      const placeholders = retargetedFieldIds.map(() => "?").join(", ");
+      // R35: purge content_refs for schema-ref fields whose ref_schema changed.
+      // Scoped to this schema's entries, and runs BEFORE the deleted-fields block
+      // so a mid-edit state never exposes stale targets. No schema_version bump
+      // here: the retarget is already breaking (compat_version above), so the
+      // entries must stay conflicted until an editor re-selects a target.
+      if (retargetedFieldIds.length > 0) {
+        const placeholders = retargetedFieldIds.map(() => "?").join(", ");
+        this.db
+          .prepare(
+            `DELETE FROM content_refs WHERE field_id IN (${placeholders}) AND content_id IN (SELECT id FROM content WHERE schema = ?)`
+          )
+          .run(...retargetedFieldIds, schemaName);
+      }
+
+      // Selective schema_version bump: only bump entries that are compatible with
+      // the new schema shape. Entries not in this set fall behind compat_version
+      // and become conflicted naturally. This replaces the blanket R21 bump.
+      // Gated on no retargets (R35): a mixed PATCH must not un-conflict entries
+      // that still miss a valid target for the retargeted field.
+      if (
+        unaffectedEntryIds.length > 0 &&
+        retargetedFieldIds.length === 0
+      ) {
+        const placeholders = unaffectedEntryIds.map(() => "?").join(", ");
+        this.db
+          .prepare(
+            `UPDATE content SET schema_version = ? WHERE id IN (${placeholders})`
+          )
+          .run(version, ...unaffectedEntryIds);
+      }
+
+      const deleteField = this.db.prepare(
+        "DELETE FROM schema_fields WHERE id = ? AND schema = ?"
+      );
+      const updateField = this.db.prepare(
+        "UPDATE schema_fields SET label = ?, type = ?, required = ?, ref_schema = ?, sort_order = ? WHERE id = ?"
+      );
+      const insertField = this.db.prepare(
+        "INSERT INTO schema_fields (schema, label, type, required, ref_schema, sort_order) VALUES (?, ?, ?, ?, ?, ?)"
+      );
+
+      const existingIdsResult = this.db
+        .prepare("SELECT id FROM schema_fields WHERE schema = ?")
+        .all(schemaName) as Array<{ id: number }>;
+      const existingIds = new Set(existingIdsResult.map((r) => r.id));
+
+      const incomingIds = new Set<number>();
+      for (const f of newFields) {
+        if ("id" in f && typeof f.id === "number") {
+          incomingIds.add(f.id);
+        }
+      }
+
+      for (const id of existingIds) {
+        if (!incomingIds.has(id)) {
+          deleteField.run(id, schemaName);
+        }
+      }
+
+      for (let i = 0; i < newFields.length; i++) {
+        const f = newFields[i];
+        const required = f.required ? 1 : 0;
+        if ("id" in f && typeof f.id === "number") {
+          updateField.run(f.label, f.type, required, f.ref_schema ?? null, i, f.id);
+        } else {
+          insertField.run(
+            schemaName,
+            f.label,
+            f.type,
+            required,
+            f.ref_schema ?? null,
+            i
+          );
+        }
+      }
+
       this.db
         .prepare(
-          `DELETE FROM content_refs WHERE field_id IN (${placeholders}) AND content_id IN (SELECT id FROM content WHERE schema = ?)`
+          "UPDATE schemas SET version = ?, compat_version = ?, last_modified_date = ?, last_modified_by = ? WHERE name = ?"
         )
-        .run(...retargetedFieldIds, schemaName);
-    }
+        .run(version, compatVersion, now, modifiedBy, schemaName);
+    });
 
-    // Selective schema_version bump: only bump entries that are compatible with
-    // the new schema shape. Entries not in this set fall behind compat_version
-    // and become conflicted naturally. This replaces the blanket R21 bump.
-    // Gated on no retargets (R35): a mixed PATCH must not un-conflict entries
-    // that still miss a valid target for the retargeted field.
-    if (
-      unaffectedEntryIds.length > 0 &&
-      retargetedFieldIds.length === 0
-    ) {
-      const placeholders = unaffectedEntryIds.map(() => "?").join(", ");
-      this.db
-        .prepare(
-          `UPDATE content SET schema_version = ? WHERE id IN (${placeholders})`
-        )
-        .run(version, ...unaffectedEntryIds);
-    }
-
-    const deleteField = this.db.prepare(
-      "DELETE FROM schema_fields WHERE id = ? AND schema = ?"
-    );
-    const updateField = this.db.prepare(
-      "UPDATE schema_fields SET label = ?, type = ?, required = ?, ref_schema = ?, sort_order = ? WHERE id = ?"
-    );
-    const insertField = this.db.prepare(
-      "INSERT INTO schema_fields (schema, label, type, required, ref_schema, sort_order) VALUES (?, ?, ?, ?, ?, ?)"
-    );
-
-    const existingIdsResult = this.db
-      .prepare("SELECT id FROM schema_fields WHERE schema = ?")
-      .all(schemaName) as Array<{ id: number }>;
-    const existingIds = new Set(existingIdsResult.map((r) => r.id));
-
-    const incomingIds = new Set<number>();
-    for (const f of newFields) {
-      if ("id" in f && typeof f.id === "number") {
-        incomingIds.add(f.id);
-      }
-    }
-
-    for (const id of existingIds) {
-      if (!incomingIds.has(id)) {
-        deleteField.run(id, schemaName);
-      }
-    }
-
-    for (let i = 0; i < newFields.length; i++) {
-      const f = newFields[i];
-      const required = f.required ? 1 : 0;
-      if ("id" in f && typeof f.id === "number") {
-        updateField.run(f.label, f.type, required, f.ref_schema ?? null, i, f.id);
-      } else {
-        insertField.run(
-          schemaName,
-          f.label,
-          f.type,
-          required,
-          f.ref_schema ?? null,
-          i
-        );
-      }
-    }
-
-    this.db
-      .prepare(
-        "UPDATE schemas SET version = ?, compat_version = ?, last_modified_date = ?, last_modified_by = ? WHERE name = ?"
-      )
-      .run(version, compatVersion, now, modifiedBy, schemaName);
+    tx();
   }
 
   deleteSchema(schemaName: string): void {

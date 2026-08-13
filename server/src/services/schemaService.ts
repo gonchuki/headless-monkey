@@ -140,18 +140,22 @@ export class SchemaService {
       unaffectedEntryIds,
     } = this.validateAndComputeUpdate(name, fields);
 
-    this.repo.updateSchemaFields(
-      name,
-      fields,
-      newVersion,
-      compatVersion,
-      modifiedBy,
-      deletedFieldIds,
-      retargetedFieldIds,
-      unaffectedEntryIds
-    );
+    // Wrap the write + post-update read in a transaction so a concurrent
+    // writer cannot interleave between updateSchemaFields and getSchema.
+    return this.db.transaction(() => {
+      this.repo.updateSchemaFields(
+        name,
+        fields,
+        newVersion,
+        compatVersion,
+        modifiedBy,
+        deletedFieldIds,
+        retargetedFieldIds,
+        unaffectedEntryIds
+      );
 
-    return this.repo.getSchema(name)!;
+      return this.repo.getSchema(name)!;
+    })();
   }
 
   /**
