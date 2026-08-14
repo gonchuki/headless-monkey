@@ -90,7 +90,7 @@ export class ContentService {
         // If the FK constraint fires (target deleted between validation and insert),
         // better-sqlite3 throws a SqliteError. Convert to 422 so the route handler
         // returns a proper error instead of 500.
-        if (typeof err === "object" && err !== null && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.includes("FOREIGN KEY")) {
+        if (typeof err === "object" && err !== null && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.includes("FOREIGNKEY")) {
           throw new ContentServiceError(422, `Schema-ref target entry no longer exists`);
         }
         throw err;
