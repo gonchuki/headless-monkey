@@ -99,14 +99,12 @@ export function useSchemaEntryCount(schemaName: string, enabled: boolean) {
   });
 }
 
-export function useSchemaPatchPreview(name: string, fields: SchemaFieldInput[], enabled: boolean) {
-  return useQuery({
-    queryKey: queryKeys.schemaPreview(name, JSON.stringify(fields)),
-    queryFn: () =>
+export function useSchemaPatchPreview() {
+  return useMutation({
+    mutationFn: ({ name, fields }: { name: string; fields: SchemaFieldInput[] }) =>
       apiFetch<SchemaUpdatePreview>(`/api/schemas/${encodeURIComponent(name)}?preview=true`, {
         method: "PATCH",
         body: JSON.stringify({ fields }),
       }),
-    enabled,
   });
 }

@@ -176,11 +176,7 @@ export default function SchemaEditorPage() {
     }
   }, [schemaQuery.isSuccess, schemaQuery.data, state.loadedName, name]);
 
-  const previewQuery = useSchemaPatchPreview(
-    state.name,
-    pendingSave?.fields ?? [],
-    pendingSave != null && !deleted,
-  );
+  const previewMutation = useSchemaPatchPreview();
 
   // Auto-proceed: a non-breaking change applies immediately after the preview resolves.
   // `useLayoutEffect` closes the dialog before the browser paints, so the resolved
@@ -190,8 +186,8 @@ export default function SchemaEditorPage() {
     if (
       pendingSave != null &&
       !deleted &&
-      previewQuery.isSuccess &&
-      previewQuery.data?.breaking === false
+      previewMutation.isSuccess &&
+      previewMutation.data?.breaking === false
     ) {
       const { fields } = pendingSave;
       setPendingSave(null);
@@ -205,7 +201,7 @@ export default function SchemaEditorPage() {
         },
       );
     }
-  }, [pendingSave, deleted, previewQuery.isSuccess, previewQuery.data, state.name, update, navigate]);
+  }, [pendingSave, deleted, previewMutation.isSuccess, previewMutation.data, state.name, update, navigate]);
 
   const refSchemas = (listQuery.data ?? [])
     .map((schema) => schema.name)
@@ -269,12 +265,13 @@ export default function SchemaEditorPage() {
       );
     } else {
       setPendingSave({ fields });
+      previewMutation.mutate({ name: state.name, fields });
     }
   }
 
   function handleSaveConfirm() {
     if (pendingSave == null || deleted) return;
-    const breakingAtConfirm = previewQuery.data?.breaking ?? false;
+    const breakingAtConfirm = previewMutation.data?.breaking ?? false;
     const { fields } = pendingSave;
     setPendingSave(null);
     update.mutate(
@@ -408,10 +405,10 @@ export default function SchemaEditorPage() {
           if (!open) setPendingSave(null);
         }}
         schemaName={state.name}
-        previewPending={pendingSave != null && (previewQuery.isPending || previewQuery.isFetching)}
-        previewError={pendingSave != null ? (errorMessage(previewQuery.error) ?? null) : null}
-        affectedCount={previewQuery.data?.affectedEntries.length ?? null}
-        affectedEntries={previewQuery.data?.affectedEntries ?? null}
+        previewPending={pendingSave != null && previewMutation.isPending}
+        previewError={pendingSave != null ? (errorMessage(previewMutation.error) ?? null) : null}
+        affectedCount={previewMutation.data?.affectedEntries.length ?? null}
+        affectedEntries={previewMutation.data?.affectedEntries ?? null}
         savePending={update.isPending}
         saveError={errorMessage(update.error) ?? null}
         onConfirm={handleSaveConfirm}
