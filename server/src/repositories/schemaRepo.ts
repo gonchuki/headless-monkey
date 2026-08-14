@@ -1,5 +1,5 @@
 import type { Db } from "../db/database";
-import type { FieldInput, FieldWithId, SchemaEntry } from "../types";
+import type { FieldInput, FieldWithId, SchemaEntry, ScalarFieldWithId, SchemaRefFieldWithId } from "../types";
 
 export interface SchemaFullMetadata {
   name: string;
@@ -37,7 +37,7 @@ export class SchemaRepository {
           f.label,
           f.type,
           f.required ? 1 : 0,
-          f.ref_schema ?? null,
+          f.type === "schema-ref" ? f.ref_schema : null,
           i
         );
       }
@@ -78,14 +78,25 @@ export class SchemaRepository {
         sort_order: number;
       }>;
 
-    const fields: FieldWithId[] = rawFields.map((f) => ({
-      id: f.id,
-      label: f.label,
-      type: f.type as FieldInput["type"],
-      required: Boolean(f.required),
-      ref_schema: f.ref_schema ?? undefined,
-      sort_order: f.sort_order,
-    }));
+    const fields: FieldWithId[] = rawFields.map((f) => {
+      const base = {
+        id: f.id,
+        label: f.label,
+        required: Boolean(f.required),
+        sort_order: f.sort_order,
+      };
+      if (f.type === "schema-ref") {
+        return {
+          ...base,
+          type: "schema-ref" as const,
+          ref_schema: f.ref_schema!,
+        } satisfies SchemaRefFieldWithId;
+      }
+      return {
+        ...base,
+        type: f.type as ScalarFieldWithId["type"],
+      } satisfies ScalarFieldWithId;
+    });
 
     return {
       name: row.name,
@@ -133,14 +144,24 @@ export class SchemaRepository {
       if (!result.has(f.schema)) {
         result.set(f.schema, []);
       }
-      result.get(f.schema)!.push({
+      const base = {
         id: f.id,
         label: f.label,
-        type: f.type as FieldInput["type"],
         required: Boolean(f.required),
-        ref_schema: f.ref_schema ?? undefined,
         sort_order: f.sort_order,
-      });
+      };
+      if (f.type === "schema-ref") {
+        result.get(f.schema)!.push({
+          ...base,
+          type: "schema-ref" as const,
+          ref_schema: f.ref_schema!,
+        } satisfies SchemaRefFieldWithId);
+      } else {
+        result.get(f.schema)!.push({
+          ...base,
+          type: f.type as ScalarFieldWithId["type"],
+        } satisfies ScalarFieldWithId);
+      }
     }
 
     return result;
@@ -164,14 +185,25 @@ export class SchemaRepository {
         sort_order: number;
       }>;
 
-    return rawFields.map((f) => ({
-      id: f.id,
-      label: f.label,
-      type: f.type as FieldInput["type"],
-      required: Boolean(f.required),
-      ref_schema: f.ref_schema ?? undefined,
-      sort_order: f.sort_order,
-    }));
+    return rawFields.map((f) => {
+      const base = {
+        id: f.id,
+        label: f.label,
+        required: Boolean(f.required),
+        sort_order: f.sort_order,
+      };
+      if (f.type === "schema-ref") {
+        return {
+          ...base,
+          type: "schema-ref" as const,
+          ref_schema: f.ref_schema!,
+        } satisfies SchemaRefFieldWithId;
+      }
+      return {
+        ...base,
+        type: f.type as ScalarFieldWithId["type"],
+      } satisfies ScalarFieldWithId;
+    });
   }
 
   updateSchemaFields(
@@ -252,15 +284,16 @@ export class SchemaRepository {
       for (let i = 0; i < newFields.length; i++) {
         const f = newFields[i];
         const required = f.required ? 1 : 0;
+        const refSchema = f.type === "schema-ref" && "ref_schema" in f ? f.ref_schema : null;
         if ("id" in f && typeof f.id === "number") {
-          updateField.run(f.label, f.type, required, f.ref_schema ?? null, i, f.id);
+          updateField.run(f.label, f.type, required, refSchema, i, f.id);
         } else {
           insertField.run(
             schemaName,
             f.label,
             f.type,
             required,
-            f.ref_schema ?? null,
+            refSchema,
             i
           );
         }

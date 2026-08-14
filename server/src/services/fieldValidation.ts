@@ -1,4 +1,4 @@
-import type { FieldType } from "../types";
+import type { ScalarFieldInput } from "../types";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -15,7 +15,7 @@ export function isValidDateString(value: string): boolean {
  * must confirm the target entry exists) keep that branch local.
  */
 export function isScalarValueValid(
-  type: FieldType,
+  type: ScalarFieldInput["type"],
   required: boolean,
   value: unknown
 ): boolean {
@@ -34,7 +34,7 @@ export function isScalarValueValid(
 }
 
 /** The only coercion rule: number→text (lossless, R13/R17). */
-export function coerceScalarValue(type: FieldType, value: unknown): unknown {
+export function coerceScalarValue(type: ScalarFieldInput["type"], value: unknown): unknown {
   if (type === "text" && typeof value === "number") {
     return String(value);
   }

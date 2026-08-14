@@ -303,7 +303,6 @@ export class ContentService {
         typeof value === "number" &&
         Number.isInteger(value) &&
         value > 0 &&
-        !!field.ref_schema &&
         this.repo.entryExistsInSchema(value, field.ref_schema)
       );
     }
@@ -311,6 +310,7 @@ export class ContentService {
   }
 
   private coerce(field: FieldWithId, value: unknown): unknown {
+    if (field.type === "schema-ref") return null;
     return coerceScalarValue(field.type, value);
   }
 
@@ -355,9 +355,7 @@ export class ContentService {
       if (shape === "editor") {
         values[String(field.id)] = targetContentId;
       } else {
-        values[field.label] = field.ref_schema
-          ? { id: targetContentId, schema: field.ref_schema }
-          : targetContentId;
+        values[field.label] = { id: targetContentId, schema: field.ref_schema };
       }
     }
 

@@ -21,17 +21,32 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
   "schema-ref": "Schema reference",
 };
 
-export interface SchemaFieldInput {
+export interface ScalarFieldInput {
   id?: number;
   label: string;
-  type: FieldType;
+  type: "text" | "number" | "boolean" | "date";
   required: boolean;
-  ref_schema?: string;
 }
 
-export interface SchemaField extends SchemaFieldInput {
+export interface SchemaRefFieldInput {
+  id?: number;
+  label: string;
+  type: "schema-ref";
+  required: boolean;
+  ref_schema: string;
+}
+
+export type SchemaFieldInput = ScalarFieldInput | SchemaRefFieldInput;
+
+export interface ScalarField extends ScalarFieldInput {
   id: number;
 }
+
+export interface SchemaRefField extends SchemaRefFieldInput {
+  id: number;
+}
+
+export type SchemaField = ScalarField | SchemaRefField;
 
 export interface SchemaEntry {
   name: string;
