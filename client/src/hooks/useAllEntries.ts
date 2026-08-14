@@ -1,7 +1,7 @@
 import { useQueries } from "@tanstack/react-query";
 import { apiFetch, type ContentListEntry, type PaginationResponse } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
-import type { PaginationParams, PaginatedEntries } from "@/hooks/useEntries";
+import type { PaginationParams, SortParams, PaginatedEntries } from "@/hooks/useEntries";
 
 export interface AllEntriesQuery {
   data: ContentListEntry[];
@@ -13,19 +13,21 @@ export interface AllEntriesQuery {
   pagination: PaginationResponse;
 }
 
-export function useAllEntries(schemaNames: string[], pagination?: PaginationParams): AllEntriesQuery {
+export function useAllEntries(schemaNames: string[], pagination?: PaginationParams, sort?: SortParams): AllEntriesQuery {
   const schemas = [...new Set(schemaNames.filter((name) => name.length > 0))];
 
   const queries = useQueries({
     queries: schemas.map((schema) => ({
       queryKey: pagination
-        ? [...queryKeys.entries(schema), { pagination }] as const
+        ? [...queryKeys.entries(schema), { pagination }, { sort }] as const
         : queryKeys.entries(schema),
       queryFn: () => {
         const params = new URLSearchParams();
         if (pagination?.limit != null) params.set("limit", String(pagination.limit));
         if (pagination?.cursor != null) params.set("cursor", String(pagination.cursor));
         if (pagination?.direction) params.set("direction", pagination.direction);
+        if (sort?.sortField) params.set("sort_field", sort.sortField);
+        if (sort?.sortOrder) params.set("sort_order", sort.sortOrder);
         const qs = params.toString();
         const url = `/api/schemas/${encodeURIComponent(schema)}/entries${qs ? `?${qs}` : ""}`;
         if (pagination) {

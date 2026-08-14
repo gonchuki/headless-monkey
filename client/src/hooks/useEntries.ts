@@ -10,6 +10,11 @@ export interface PaginationParams {
   direction?: "forward" | "backward";
 }
 
+export interface SortParams {
+  sortField: string;
+  sortOrder: "asc" | "desc";
+}
+
 export interface PaginatedEntries {
   entries: ContentListEntry[];
   pagination: PaginationResponse;
@@ -27,10 +32,10 @@ export interface UseEntriesResult {
   remove: ReturnType<typeof useMutation<void, Error, number>>;
 }
 
-export function useEntries(schemaName: string, enabled = true, pagination?: PaginationParams): UseEntriesResult {
+export function useEntries(schemaName: string, enabled = true, pagination?: PaginationParams, sort?: SortParams): UseEntriesResult {
   const queryClient = useQueryClient();
   const key = pagination
-    ? [...queryKeys.entries(schemaName), { pagination }] as const
+    ? [...queryKeys.entries(schemaName), { pagination }, { sort }] as const
     : queryKeys.entries(schemaName);
 
   const query = useQuery<PaginatedEntries | ContentListEntry[]>({
@@ -40,6 +45,8 @@ export function useEntries(schemaName: string, enabled = true, pagination?: Pagi
       if (pagination?.limit != null) params.set("limit", String(pagination.limit));
       if (pagination?.cursor != null) params.set("cursor", String(pagination.cursor));
       if (pagination?.direction) params.set("direction", pagination.direction);
+      if (sort?.sortField) params.set("sort_field", sort.sortField);
+      if (sort?.sortOrder) params.set("sort_order", sort.sortOrder);
       const qs = params.toString();
       const url = `/api/schemas/${encodeURIComponent(schemaName)}/entries${qs ? `?${qs}` : ""}`;
       if (pagination) {
