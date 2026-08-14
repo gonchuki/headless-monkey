@@ -7,7 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { apiFetch, type ContentListEntry, type ContentValue, type SchemaEntry, type SchemaField } from "@/lib/api";
+import { apiFetch, type ContentListEntry, type ContentValue, type SchemaEntry, type SchemaRefField } from "@/lib/api";
 import { entryLabel, schemaLabelField } from "@/lib/entries";
 import { queryKeys } from "@/lib/query";
 
@@ -20,7 +20,7 @@ function placeholderText(entries: ContentListEntry[], validEntries: ContentListE
 }
 
 export interface ReferenceSelectProps {
-  field: SchemaField;
+  field: SchemaRefField;
   value: ContentValue | null;
   disabled?: boolean;
   invalid?: boolean;

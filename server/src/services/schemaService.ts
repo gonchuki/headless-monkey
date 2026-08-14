@@ -425,7 +425,7 @@ export class SchemaService {
         // from a type flip). Refs must also point at an entry that exists in
         // the declared ref_schema, otherwise the entry is conflicted.
         if (rowsById.has(id)) return false;
-        if (hasRef && field.ref_schema) {
+        if (hasRef) {
           const targetId = refsById.get(id)!;
           if (!this.contentRepo.entryExistsInSchema(targetId, field.ref_schema)) {
             return false;
@@ -515,7 +515,7 @@ export class SchemaService {
     // Extract incoming refs from the fields parameter
     const incomingRefs: string[] = [];
     for (const f of fields) {
-      if (f.type === "schema-ref" && f.ref_schema) {
+      if (f.type === "schema-ref") {
         incomingRefs.push(f.ref_schema);
       }
     }

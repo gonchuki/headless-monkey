@@ -65,7 +65,7 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
           label: field.label,
           type: field.type,
           required: field.required,
-          ref_schema: field.ref_schema,
+          ...(field.type === "schema-ref" ? { ref_schema: field.ref_schema } : {}),
         })),
         loadedName: action.name,
         nextNewId: -1,
@@ -111,18 +111,21 @@ function toPayload(fields: SchemaDraft[]): SchemaFieldInput[] {
   return fields
     .filter((field) => !field.deleted)
     .map((field) => {
-      const payload: SchemaFieldInput = {
+      if (field.type === "schema-ref" && field.ref_schema != null) {
+        return {
+          label: field.label,
+          type: "schema-ref" as const,
+          required: field.required,
+          ref_schema: field.ref_schema,
+          ...(field.id != null && field.id > 0 ? { id: field.id } : {}),
+        };
+      }
+      return {
         label: field.label,
-        type: field.type,
+        type: field.type as "text" | "number" | "boolean" | "date",
         required: field.required,
+        ...(field.id != null && field.id > 0 ? { id: field.id } : {}),
       };
-      if (field.ref_schema != null) {
-        payload.ref_schema = field.ref_schema;
-      }
-      if (field.id != null && field.id > 0) {
-        payload.id = field.id;
-      }
-      return payload;
     });
 }
 

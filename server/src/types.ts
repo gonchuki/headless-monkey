@@ -1,16 +1,31 @@
 export type FieldType = "text" | "number" | "boolean" | "date" | "schema-ref";
 
-export interface FieldInput {
+export interface ScalarFieldInput {
   label: string;
-  type: FieldType;
+  type: "text" | "number" | "boolean" | "date";
   required: boolean;
-  ref_schema?: string;
 }
 
-export interface FieldWithId extends FieldInput {
+export interface SchemaRefFieldInput {
+  label: string;
+  type: "schema-ref";
+  required: boolean;
+  ref_schema: string;
+}
+
+export type FieldInput = ScalarFieldInput | SchemaRefFieldInput;
+
+export interface ScalarFieldWithId extends ScalarFieldInput {
   id: number;
   sort_order: number;
 }
+
+export interface SchemaRefFieldWithId extends SchemaRefFieldInput {
+  id: number;
+  sort_order: number;
+}
+
+export type FieldWithId = ScalarFieldWithId | SchemaRefFieldWithId;
 
 export interface SchemaCreateInput {
   name: string;
@@ -18,7 +33,7 @@ export interface SchemaCreateInput {
 }
 
 export interface SchemaUpdateInput {
-  fields: (FieldWithId | Omit<FieldInput, "id">)[];
+  fields: (FieldWithId | ScalarFieldInput | SchemaRefFieldInput)[];
 }
 
 export interface SchemaEntry {
