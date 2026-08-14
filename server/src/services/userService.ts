@@ -38,29 +38,38 @@ export class UserService {
   }
 
   async update(id: number, input: UpdateUserInput): Promise<void> {
-    const user = this.repo.findById(id);
-    if (!user) {
-      const err = new Error("User not found") as Error & { statusCode?: number };
-      err.statusCode = 404;
-      throw err;
-    }
+    // Hash password OUTSIDE the transaction (bcrypt is async; better-sqlite3
+    // transactions are synchronous). Then do the existence check + write inside
+    // one transaction so a concurrent delete cannot interleave.
+    let hashedPassword: string | undefined;
     if (input.password) {
-      const hashed = await this.hashPassword(input.password);
-      this.repo.updatePassword(id, hashed);
+      hashedPassword = await this.hashPassword(input.password);
+    }
+    if (hashedPassword !== undefined) {
+      const found = this.repo.updatePasswordIfFound(id, hashedPassword);
+      if (!found) {
+        const err = new Error("User not found") as Error & { statusCode?: number };
+        err.statusCode = 404;
+        throw err;
+      }
     }
     if (input.disabled !== undefined) {
-      this.repo.updateDisabled(id, input.disabled);
+      const found = this.repo.updateDisabledIfFound(id, input.disabled);
+      if (!found) {
+        const err = new Error("User not found") as Error & { statusCode?: number };
+        err.statusCode = 404;
+        throw err;
+      }
     }
   }
 
   async remove(id: number): Promise<void> {
-    const user = this.repo.findById(id);
-    if (!user) {
+    const found = this.repo.removeIfFound(id);
+    if (!found) {
       const err = new Error("User not found") as Error & { statusCode?: number };
       err.statusCode = 404;
       throw err;
     }
-    this.repo.remove(id);
   }
 
   list(): UserListItem[] {
