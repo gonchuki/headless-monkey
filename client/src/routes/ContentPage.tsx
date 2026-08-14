@@ -7,6 +7,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -16,9 +23,10 @@ import {
 import { toast } from "@/components/ui/toast";
 import { useAllEntries } from "@/hooks/useAllEntries";
 import { useEntries } from "@/hooks/useEntries";
+import type { PaginationParams } from "@/hooks/useEntries";
 import { useRealtime } from "@/hooks/useRealtime";
 import { useSchemas } from "@/hooks/useSchemas";
-import type { ContentListEntry } from "@/lib/api";
+import type { ContentListEntry, PaginationResponse } from "@/lib/api";
 import { entryLabel, schemaLabelField } from "@/lib/entries";
 import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
@@ -26,15 +34,48 @@ import { SchemaBadge } from "@/components/shared/SchemaBadge";
 import { Switch } from "@/components/ui/switch";
 
 const ALL_SCHEMAS_VALUE = "__all__";
+const PAGE_LIMIT = 50;
 
 function errorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
 }
 
+/** Derive a stable list URL for editor return flows. */
+function buildListUrl(opts: { allView: boolean; selected: string | null; conflictedOnly: boolean }): string {
+  const base = opts.allView ? "/content" : `/content/${encodeURIComponent(opts.selected ?? "")}`;
+  const params = new URLSearchParams();
+  if (opts.conflictedOnly) params.set("conflicted", "1");
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
+/** Build a URL for a specific page, preserving conflicted filter. */
+function buildPageUrl(opts: {
+  allView: boolean;
+  selected: string | null;
+  conflictedOnly: boolean;
+  targetPage: number;
+  pagination?: PaginationParams;
+}): string {
+  const base = opts.allView ? "/content" : `/content/${encodeURIComponent(opts.selected ?? "")}`;
+  const params = new URLSearchParams();
+  if (opts.conflictedOnly) params.set("conflicted", "1");
+  if (opts.targetPage > 1) params.set("page", String(opts.targetPage));
+  if (opts.pagination) {
+    if (opts.pagination.direction === "forward" && opts.pagination.cursor != null) {
+      params.set("cursor_next", String(opts.pagination.cursor));
+    } else if (opts.pagination.direction === "backward" && opts.pagination.cursor != null) {
+      params.set("cursor_prev", String(opts.pagination.cursor));
+    }
+  }
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
 export default function ContentPage() {
   const navigate = useNavigate();
   const { schema: schemaParam } = useParams();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const { listQuery: schemasQuery } = useSchemas();
   const [entryToDelete, setEntryToDelete] = useState<ContentListEntry | null>(null);
 
@@ -43,37 +84,64 @@ export default function ContentPage() {
   const allView = selected == null;
   const conflictedOnly = searchParams.get("conflicted") === "1";
 
-  // Every navigation target in this page must round-trip the filter through
-  // `?conflicted=1` so the list survives schema switches, the editor return
-  // flow (`state.list`), and the schema-not-found back button.
-  function withConflicted(path: string): string {
-    return conflictedOnly ? `${path}?conflicted=1` : path;
-  }
+  // Pagination state from URL
+  const page = Number(searchParams.get("page")) || 1;
+  const cursorNext = searchParams.get("cursor_next");
+  const cursorPrev = searchParams.get("cursor_prev");
 
-  const listUrl = withConflicted(
-    allView ? "/content" : `/content/${encodeURIComponent(selected)}`,
-  );
+  const hasCursorState = cursorNext != null || cursorPrev != null;
+  const paginationParams: PaginationParams | undefined = hasCursorState
+    ? {
+        limit: PAGE_LIMIT,
+        ...(cursorNext != null ? { cursor: Number(cursorNext), direction: "forward" as const } : {}),
+        ...(cursorPrev != null ? { cursor: Number(cursorPrev), direction: "backward" as const } : {}),
+      }
+    : undefined;
 
-  // The delete mutation is always keyed to the deleted entry's own schema so
-  // the All view's merged list (per-schema queries) observes its optimistic
-  // removal; in the filtered view that equals the selected schema.
+  const listUrl = buildListUrl({ allView, selected, conflictedOnly });
+
+  // The delete mutation is always keyed to the deleted entry's own schema
   const deleteSource = useEntries(entryToDelete?.schema ?? "");
   const remove = deleteSource.remove;
 
-  // Filtered view reads the selected schema's entries directly; the All view
-  // merges one query per schema.
-  const filtered = useEntries(selected ?? "");
-  const allEntriesQuery = useAllEntries(allView ? schemas.map((schema) => schema.name) : []);
-  const entriesQuery = allView ? allEntriesQuery : filtered.listQuery;
-  const entries = entriesQuery.data ?? [];
+  // Filtered view: always pass pagination params (undefined on first page = non-paginated)
+  const filtered = useEntries(selected ?? "", true, paginationParams);
+
+  const allEntriesQuery = useAllEntries(allView ? schemas.map((schema) => schema.name) : [], paginationParams);
+
+  // Determine entries and pagination based on view type
+  let entries: ContentListEntry[];
+  let pagination: PaginationResponse;
+  let entriesIsPending: boolean;
+  let entriesIsError: boolean;
+  let entriesError: unknown;
+  let entriesRefetch: () => Promise<void>;
+
+  if (allView) {
+    entries = allEntriesQuery.data;
+    pagination = allEntriesQuery.pagination;
+    entriesIsPending = allEntriesQuery.isPending;
+    entriesIsError = allEntriesQuery.isError;
+    entriesError = allEntriesQuery.error;
+    entriesRefetch = allEntriesQuery.refetch;
+  } else {
+    entries = filtered.entries;
+    pagination = filtered.pagination;
+    entriesIsPending = filtered.isPending;
+    entriesIsError = filtered.isError;
+    entriesError = filtered.error;
+    entriesRefetch = filtered.refetch;
+  }
+
   const visibleEntries = conflictedOnly ? entries.filter((entry) => entry.conflict) : entries;
+  const hasNextPage = pagination.nextCursor != null;
+  const hasPrevPage = hasCursorState && pagination.prevCursor != null;
 
   const labelFieldIds = new Map(schemas.map((schema) => [schema.name, schemaLabelField(schema)]));
   const schemaNotFound =
     selected != null && schemasQuery.isSuccess && !schemas.some((schema) => schema.name === selected);
 
-  // Live stream: the All view passes every schema so reconnect re-syncs each
-  // schema's entry query; the filtered view watches only its schema.
+  // Live stream
   const { deletedSchemas } = useRealtime({
     schemas: allView ? schemas.map((schema) => schema.name) : selected != null ? [selected] : [],
     enabled: schemas.length > 0,
@@ -97,11 +165,37 @@ export default function ContentPage() {
     });
   }
 
+  function goToNextPage() {
+    if (!hasNextPage || pagination.nextCursor == null) return;
+    navigate(
+      buildPageUrl({
+        allView,
+        selected,
+        conflictedOnly,
+        targetPage: page + 1,
+        pagination: { limit: PAGE_LIMIT, cursor: pagination.nextCursor, direction: "forward" },
+      }),
+    );
+  }
+
+  function goToPrevPage() {
+    if (!hasPrevPage || pagination.prevCursor == null) return;
+    navigate(
+      buildPageUrl({
+        allView,
+        selected,
+        conflictedOnly,
+        targetPage: page - 1,
+        pagination: { limit: PAGE_LIMIT, cursor: pagination.prevCursor, direction: "backward" },
+      }),
+    );
+  }
+
   if (schemaNotFound) {
     return (
       <div className="mx-auto max-w-3xl space-y-6">
         <div className="flex items-center gap-3">
-          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate(withConflicted("/content"))}>
+          <Button type="button" variant="ghost" size="icon" aria-label="Back to content" onClick={() => navigate(buildListUrl({ allView: true, selected: null, conflictedOnly }))}>
             <ArrowLeft className="size-4" aria-hidden="true" />
           </Button>
           <h1 className="font-heading text-xl font-semibold">Schema not found</h1>
@@ -164,11 +258,12 @@ export default function ContentPage() {
               value={selected ?? ALL_SCHEMAS_VALUE}
               onValueChange={(value) => {
                 if (value == null) return;
-                if (value === ALL_SCHEMAS_VALUE) {
-                  navigate(withConflicted("/content"));
-                } else {
-                  navigate(withConflicted(`/content/${encodeURIComponent(value)}`));
-                }
+                // Reset pagination on schema change
+                const base = value === ALL_SCHEMAS_VALUE ? "/content" : `/content/${encodeURIComponent(value)}`;
+                const params = new URLSearchParams();
+                if (conflictedOnly) params.set("conflicted", "1");
+                const qs = params.toString();
+                navigate(qs ? `${base}?${qs}` : base);
               }}
             >
               <SelectTrigger id="content-schema">
@@ -210,9 +305,14 @@ export default function ContentPage() {
             <Switch
               id="conflicted-only"
               checked={conflictedOnly}
-              onCheckedChange={(checked) =>
-                checked ? setSearchParams({ conflicted: "1" }) : setSearchParams({})
-              }
+              onCheckedChange={(checked) => {
+                // Reset pagination when toggling conflicted filter
+                const base = allView ? "/content" : `/content/${encodeURIComponent(selected ?? "")}`;
+                const params = new URLSearchParams();
+                if (checked) params.set("conflicted", "1");
+                const qs = params.toString();
+                navigate(qs ? `${base}?${qs}` : base);
+              }}
             />
             <Label htmlFor="conflicted-only" className="cursor-pointer font-normal">
               Conflicted content only
@@ -221,7 +321,7 @@ export default function ContentPage() {
         </div>
       )}
 
-      {schemas.length > 0 && entriesQuery.isPending && (
+      {schemas.length > 0 && entriesIsPending && (
         <ul className="space-y-2">
           {Array.from({ length: 3 }, (_, index) => (
             <li key={index}>
@@ -231,24 +331,24 @@ export default function ContentPage() {
         </ul>
       )}
 
-      {schemas.length > 0 && entriesQuery.isError && (
+      {schemas.length > 0 && entriesIsError && (
         <Alert variant="destructive">
           <AlertTitle>Could not load entries</AlertTitle>
-          <AlertDescription>{errorMessage(entriesQuery.error) ?? "Unknown error"}</AlertDescription>
-          <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => entriesQuery.refetch()}>
+          <AlertDescription>{errorMessage(entriesError) ?? "Unknown error"}</AlertDescription>
+          <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => entriesRefetch()}>
             Retry
           </Button>
         </Alert>
       )}
 
-      {schemas.length > 0 && entriesQuery.isSuccess && entries.length === 0 && (
+      {schemas.length > 0 && !entriesIsPending && !entriesIsError && entries.length === 0 && (
         <Alert>
           <AlertTitle>No entries yet</AlertTitle>
           <AlertDescription>{allView ? "Add the first entry to a schema." : "Add the first entry to this schema."}</AlertDescription>
         </Alert>
       )}
 
-      {schemas.length > 0 && entriesQuery.isSuccess && entries.length > 0 && conflictedOnly && visibleEntries.length === 0 && (
+      {schemas.length > 0 && !entriesIsPending && !entriesIsError && entries.length > 0 && conflictedOnly && visibleEntries.length === 0 && (
         <Alert>
           <AlertTitle>No conflicted entries</AlertTitle>
           <AlertDescription>
@@ -257,68 +357,102 @@ export default function ContentPage() {
         </Alert>
       )}
 
-      {schemas.length > 0 && entriesQuery.isSuccess && visibleEntries.length > 0 && (
-        <ul className="divide-y overflow-hidden rounded-xl border bg-card">
-          {visibleEntries.map((entry) => {
-            const entryDeleted = deletedSchemas.has(entry.schema);
-            const labelFieldId = labelFieldIds.get(entry.schema) ?? null;
-            return (
-              <li
-                key={entry.id}
-                className={cn(
-                  "flex items-center justify-between gap-3 p-3",
-                  entry.conflict && "bg-destructive/5",
-                  entryDeleted && "pointer-events-none opacity-50",
-                )}
-              >
-                <div className="min-w-0 flex-1 text-left">
-                  <p className="truncate text-sm font-medium">{entryLabel(entry, labelFieldId)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    v{entry.schema_version} · updated {entry.last_modified_by}
-                  </p>
-                </div>
-                {allView && (
-                  <SchemaBadge
-                    bgcolor={schemaColor(entry.schema).background}
-                    textcolor={schemaColor(entry.schema).foreground}
-                  >
-                    {entry.schema}
-                  </SchemaBadge>
-                )}
-                {entry.conflict && (
-                  <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600">
-                    <WarningCircle className="size-3.5" aria-hidden="true" />
-                    Conflicted
-                  </span>
-                )}
-                <div className="flex shrink-0 gap-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Edit ${entryLabel(entry, labelFieldId)}`}
-                    disabled={entryDeleted}
-                    onClick={() =>
-                      navigate(`/content/${encodeURIComponent(entry.schema)}/${entry.id}`, { state: { list: listUrl } })
-                    }
-                  >
-                    <PencilSimple className="size-4" aria-hidden="true" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Delete ${entryLabel(entry, labelFieldId)}`}
-                    disabled={entryDeleted}
-                    onClick={() => setEntryToDelete(entry)}
-                  >
-                    <Trash className="size-4" aria-hidden="true" />
-                  </Button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+      {schemas.length > 0 && !entriesIsPending && !entriesIsError && visibleEntries.length > 0 && (
+        <>
+          <ul className="divide-y overflow-hidden rounded-xl border bg-card">
+            {visibleEntries.map((entry) => {
+              const entryDeleted = deletedSchemas.has(entry.schema);
+              const labelFieldId = labelFieldIds.get(entry.schema) ?? null;
+              return (
+                <li
+                  key={entry.id}
+                  className={cn(
+                    "flex items-center justify-between gap-3 p-3",
+                    entry.conflict && "bg-destructive/5",
+                    entryDeleted && "pointer-events-none opacity-50",
+                  )}
+                >
+                  <div className="min-w-0 flex-1 text-left">
+                    <p className="truncate text-sm font-medium">{entryLabel(entry, labelFieldId)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      v{entry.schema_version} · updated {entry.last_modified_by}
+                    </p>
+                  </div>
+                  {allView && (
+                    <SchemaBadge
+                      bgcolor={schemaColor(entry.schema).background}
+                      textcolor={schemaColor(entry.schema).foreground}
+                    >
+                      {entry.schema}
+                    </SchemaBadge>
+                  )}
+                  {entry.conflict && (
+                    <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600">
+                      <WarningCircle className="size-3.5" aria-hidden="true" />
+                      Conflicted
+                    </span>
+                  )}
+                  <div className="flex shrink-0 gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Edit ${entryLabel(entry, labelFieldId)}`}
+                      disabled={entryDeleted}
+                      onClick={() =>
+                        navigate(`/content/${encodeURIComponent(entry.schema)}/${entry.id}`, { state: { list: listUrl } })
+                      }
+                    >
+                      <PencilSimple className="size-4" aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Delete ${entryLabel(entry, labelFieldId)}`}
+                      disabled={entryDeleted}
+                      onClick={() => setEntryToDelete(entry)}
+                    >
+                      <Trash className="size-4" aria-hidden="true" />
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+
+          {(hasNextPage || hasPrevPage) && (
+            <Pagination>
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    text="Previous"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      goToPrevPage();
+                    }}
+                    aria-disabled={!hasPrevPage}
+                    className={cn(!hasPrevPage && "pointer-events-none opacity-50")}
+                  />
+                </PaginationItem>
+                <PaginationItem>
+                  <span className="px-3 text-sm text-muted-foreground">Page {page}</span>
+                </PaginationItem>
+                <PaginationItem>
+                  <PaginationNext
+                    text="Next"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      goToNextPage();
+                    }}
+                    aria-disabled={!hasNextPage}
+                    className={cn(!hasNextPage && "pointer-events-none opacity-50")}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          )}
+        </>
       )}
 
       <DeleteConfirmDialog

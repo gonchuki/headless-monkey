@@ -213,7 +213,7 @@ export default function SchemaEditorPage() {
   const hasTombstones = tombstonedFields.length > 0;
 
   const entryCountQuery = useSchemaEntryCount(entriesSchemaName, hasTombstones && !deleted);
-  const { listQuery: entriesListQuery } = useEntries(entriesSchemaName, hasTombstones && !deleted);
+  const { entries: entriesList, isPending: entriesPending } = useEntries(entriesSchemaName, hasTombstones && !deleted);
 
   const saveBlockReason =
     hasTombstones && activeFields.length === 0
@@ -376,8 +376,8 @@ export default function SchemaEditorPage() {
         <PendingDeletionBanner
           deletedFields={tombstonedFields}
           entryCount={entryCountQuery.data}
-          entries={entriesListQuery.data}
-          entriesPending={entriesListQuery.isPending}
+          entries={entriesList}
+          entriesPending={entriesPending}
           blockReason={saveBlockReason}
           labelFieldId={labelFieldId}
         />

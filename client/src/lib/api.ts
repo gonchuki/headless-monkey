@@ -79,6 +79,11 @@ export interface SchemaUpdatePreview {
   affectedEntries: SchemaUpdatePreviewEntry[];
 }
 
+export interface PaginationResponse {
+  nextCursor: number | null;
+  prevCursor: number | null;
+}
+
 export type ContentValue = string | number | boolean;
 
 export interface ContentEntry {

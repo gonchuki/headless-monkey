@@ -28,13 +28,13 @@ export default function ContentEditorPage() {
     queryFn: () => apiFetch<SchemaEntry>(`/api/schemas/${encodeURIComponent(schemaName)}`),
   });
 
-  const { listQuery, update } = useEntries(schemaName);
+  const { entries: entriesList, isPending: entriesPending, update } = useEntries(schemaName);
 
   // Live stream: both schema and entry events affect the open entry.
   const { deletedSchemas } = useRealtime({ schemas: [schemaName] });
   const schemaDeleted = deletedSchemas.has(schemaName);
 
-  if (schemaQuery.isPending || listQuery.isPending) {
+  if (schemaQuery.isPending || entriesPending) {
     return <PageSkeleton />;
   }
 
@@ -56,7 +56,7 @@ export default function ContentEditorPage() {
     );
   }
 
-  const entry = listQuery.data?.find((candidate) => candidate.id === entryId);
+  const entry = entriesList.find((candidate) => candidate.id === entryId);
   if (!entry) {
     return (
       <div className="mx-auto max-w-3xl space-y-6">
