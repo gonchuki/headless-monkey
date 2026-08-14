@@ -1,6 +1,7 @@
 import { useQueries } from "@tanstack/react-query";
-import { apiFetch, type ContentListEntry } from "@/lib/api";
+import { apiFetch, type ContentListEntry, type PaginationResponse } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
+import type { PaginationParams, PaginatedEntries } from "@/hooks/useEntries";
 
 export interface AllEntriesQuery {
   data: ContentListEntry[];
@@ -9,15 +10,29 @@ export interface AllEntriesQuery {
   isSuccess: boolean;
   error: unknown;
   refetch: () => Promise<void>;
+  pagination: PaginationResponse;
 }
 
-export function useAllEntries(schemaNames: string[]): AllEntriesQuery {
+export function useAllEntries(schemaNames: string[], pagination?: PaginationParams): AllEntriesQuery {
   const schemas = [...new Set(schemaNames.filter((name) => name.length > 0))];
 
   const queries = useQueries({
     queries: schemas.map((schema) => ({
-      queryKey: queryKeys.entries(schema),
-      queryFn: () => apiFetch<ContentListEntry[]>(`/api/schemas/${encodeURIComponent(schema)}/entries`),
+      queryKey: pagination
+        ? [...queryKeys.entries(schema), { pagination }] as const
+        : queryKeys.entries(schema),
+      queryFn: () => {
+        const params = new URLSearchParams();
+        if (pagination?.limit != null) params.set("limit", String(pagination.limit));
+        if (pagination?.cursor != null) params.set("cursor", String(pagination.cursor));
+        if (pagination?.direction) params.set("direction", pagination.direction);
+        const qs = params.toString();
+        const url = `/api/schemas/${encodeURIComponent(schema)}/entries${qs ? `?${qs}` : ""}`;
+        if (pagination) {
+          return apiFetch<PaginatedEntries>(url);
+        }
+        return apiFetch<ContentListEntry[]>(url);
+      },
       enabled: schema.length > 0,
     })),
   });
@@ -31,8 +46,30 @@ export function useAllEntries(schemaNames: string[]): AllEntriesQuery {
   const isSuccess = !isError && !isPending;
 
   const data = queries
-    .flatMap((query) => query.data ?? [])
+    .flatMap((query) => {
+      if (pagination) {
+        return (query.data as PaginatedEntries | undefined)?.entries ?? [];
+      }
+      return (query.data as ContentListEntry[] | undefined) ?? [];
+    })
     .sort((a, b) => (a.last_modified_date < b.last_modified_date ? 1 : a.last_modified_date > b.last_modified_date ? -1 : 0));
+
+  // Merge pagination from all queries: nextCursor is the smallest non-null,
+  // prevCursor is the largest non-null (any schema having more = "has more").
+  const mergedPagination: PaginationResponse = pagination
+    ? {
+        nextCursor: queries.reduce<number | null>((acc, q) => {
+          const p = (q.data as PaginatedEntries | undefined)?.pagination;
+          if (p?.nextCursor == null) return null;
+          return acc == null ? p.nextCursor : Math.min(acc, p.nextCursor);
+        }, null),
+        prevCursor: queries.reduce<number | null>((acc, q) => {
+          const p = (q.data as PaginatedEntries | undefined)?.pagination;
+          if (p?.prevCursor == null) return null;
+          return acc == null ? p.prevCursor : Math.max(acc, p.prevCursor);
+        }, null),
+      }
+    : { nextCursor: null, prevCursor: null };
 
   return {
     data,
@@ -43,5 +80,6 @@ export function useAllEntries(schemaNames: string[]): AllEntriesQuery {
     refetch: async () => {
       await Promise.all(queries.map((query) => query.refetch()));
     },
+    pagination: mergedPagination,
   };
 }
