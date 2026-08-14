@@ -5,7 +5,6 @@ import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { Skeleton } from "@/components/shared/Skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Select,
