@@ -1,4 +1,5 @@
-import { RequestHandler } from "express";
+import { Request, RequestHandler } from "express";
+import type { PaginationParams } from "../types";
 
 /**
  * Express middleware that validates a route parameter is a positive integer.
@@ -20,4 +21,36 @@ export function validateNumericParam(paramName: string): RequestHandler {
 
     next();
   };
+}
+
+/**
+ * Parse cursor-based pagination query params (limit, cursor, direction).
+ * Returns `undefined` when no pagination params are present (backward compat:
+ * callers can fall through to the un-paginated code path).
+ */
+export function parsePaginationParams(req: Request): PaginationParams | undefined {
+  const hasLimit = req.query.limit !== undefined;
+  const hasCursor = req.query.cursor !== undefined;
+  const hasDirection = req.query.direction !== undefined;
+
+  if (!hasLimit && !hasCursor && !hasDirection) return undefined;
+
+  const params: PaginationParams = {};
+
+  if (hasLimit) {
+    const n = Number(req.query.limit);
+    if (Number.isFinite(n)) params.limit = n;
+  }
+
+  if (hasCursor) {
+    const n = Number(req.query.cursor);
+    if (Number.isFinite(n)) params.cursor = n;
+  }
+
+  const dir = req.query.direction;
+  if (dir === "forward" || dir === "backward") {
+    params.direction = dir;
+  }
+
+  return params;
 }

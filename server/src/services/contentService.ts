@@ -5,7 +5,7 @@ import {
   coerceScalarValue,
   isScalarValueValid,
 } from "./fieldValidation";
-import type { FieldWithId, SchemaEntry } from "../types";
+import type { FieldWithId, SchemaEntry, PaginationParams, PaginationResponse } from "../types";
 
 export interface SchemaRefValue {
   id: number;
@@ -150,15 +150,53 @@ export class ContentService {
     return this.requireSchema(schemaName);
   }
 
-  listForSchema(schemaName: string): ContentListEntry[] {
+  listForSchema(schemaName: string): ContentListEntry[];
+  listForSchema(
+    schemaName: string,
+    pagination: PaginationParams
+  ): { entries: ContentListEntry[]; pagination: PaginationResponse };
+  listForSchema(
+    schemaName: string,
+    pagination?: PaginationParams
+  ):
+    | ContentListEntry[]
+    | { entries: ContentListEntry[]; pagination: PaginationResponse } {
     const schema = this.requireSchema(schemaName);
+    if (pagination !== undefined) {
+      const result = this.repo.listEntriesPaginated(schemaName, pagination);
+      return {
+        entries: result.entries.map((entry) =>
+          this.toEntry(entry, schema, true, "editor")
+        ),
+        pagination: result.pagination,
+      };
+    }
     return this.repo
       .listEntries(schemaName)
       .map((entry) => this.toEntry(entry, schema, true, "editor"));
   }
 
-  listPublic(schemaName: string): ContentEntry[] {
+  listPublic(schemaName: string): ContentEntry[];
+  listPublic(
+    schemaName: string,
+    pagination: PaginationParams
+  ): { entries: ContentEntry[]; pagination: PaginationResponse };
+  listPublic(
+    schemaName: string,
+    pagination?: PaginationParams
+  ):
+    | ContentEntry[]
+    | { entries: ContentEntry[]; pagination: PaginationResponse } {
     const schema = this.requireSchema(schemaName);
+    if (pagination !== undefined) {
+      const result = this.repo.listEntriesPaginated(schemaName, pagination);
+      return {
+        entries: result.entries
+          .filter((entry) => entry.record.schema_version >= schema.compat_version)
+          .map((entry) => this.toEntry(entry, schema, false)),
+        pagination: result.pagination,
+      };
+    }
     return this.repo
       .listEntries(schemaName)
       .filter((entry) => entry.record.schema_version >= schema.compat_version)

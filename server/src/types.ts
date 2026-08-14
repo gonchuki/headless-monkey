@@ -67,3 +67,36 @@ export interface SchemaUpdatePreview {
   compatVersion: number;  // the compat_version the PATCH would produce
   affectedEntries: SchemaUpdatePreviewEntry[];
 }
+
+// ── Pagination ───────────────────────────────────────────────────────
+
+export const DEFAULT_LIMIT = 50;
+export const MIN_LIMIT = 1;
+export const MAX_LIMIT = 200;
+
+export interface PaginationParams {
+  limit?: number;
+  cursor?: number;
+  direction?: "forward" | "backward";
+}
+
+export interface PaginationResponse {
+  nextCursor: number | null;
+  prevCursor: number | null;
+}
+
+/** Clamp a raw limit to [MIN_LIMIT, MAX_LIMIT]; undefined → DEFAULT_LIMIT. */
+export function clampLimit(raw?: number): number {
+  if (raw === undefined || !Number.isFinite(raw)) return DEFAULT_LIMIT;
+  return Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, Math.floor(raw)));
+}
+
+/**
+ * Parse a cursor value. Non-finite, zero, or negative → null (treated as
+ * "no cursor" / first page).
+ */
+export function parseCursor(raw?: number): number | null {
+  if (raw === undefined || raw === null || !Number.isFinite(raw) || raw < 1)
+    return null;
+  return Math.floor(raw);
+}

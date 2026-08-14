@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import type { ContentService, ContentEntry, ContentValue } from "../services/contentService";
-import type { SchemaEntry } from "../types";
-import { validateNumericParam } from "./paramValidation";
+import type { SchemaEntry, PaginationResponse } from "../types";
+import { validateNumericParam, parsePaginationParams } from "./paramValidation";
 
 interface ServiceError {
   statusCode: number;
@@ -29,6 +29,7 @@ interface PublicSchemaDescriptor {
 interface PublicContentResponse {
   schema: PublicSchemaDescriptor;
   entries: Omit<ContentEntry, "schema">[];
+  pagination: PaginationResponse;
 }
 
 /**
@@ -81,10 +82,24 @@ export function createContentRouter(contentService: ContentService): Router {
       const schemaName = typeof req.params.schema === "string" ? req.params.schema : "";
       const schema = contentService.getSchema(schemaName);
       const labelToId = new Map(schema.fields.map((f) => [f.label, f.id]));
-      const entries = contentService.listPublic(schemaName);
+      const pagination = parsePaginationParams(req);
+
+      let entries: ContentEntry[];
+      let paginationResponse: PaginationResponse;
+
+      if (pagination !== undefined) {
+        const result = contentService.listPublic(schemaName, pagination);
+        entries = result.entries;
+        paginationResponse = result.pagination;
+      } else {
+        entries = contentService.listPublic(schemaName);
+        paginationResponse = { nextCursor: null, prevCursor: null };
+      }
+
       const body: PublicContentResponse = {
         schema: buildSchema(schema),
         entries: entries.map((entry) => toPublicEntry(entry, labelToId)),
+        pagination: paginationResponse,
       };
       res.json(body);
     } catch (err) {
@@ -102,6 +117,7 @@ export function createContentRouter(contentService: ContentService): Router {
       const body: PublicContentResponse = {
         schema: buildSchema(schema),
         entries: [toPublicEntry(entry, labelToId)],
+        pagination: { nextCursor: null, prevCursor: null },
       };
       res.json(body);
     } catch (err) {
