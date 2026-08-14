@@ -77,6 +77,21 @@ export class UserRepo {
     })();
   }
 
+  /** Atomically check existence + update password and/or disabled. Returns false if user not found. */
+  updateIfFound(id: number, changes: { hashedPassword?: string; disabled?: boolean }): boolean {
+    return this.db.transaction(() => {
+      const user = this.findById(id);
+      if (!user) return false;
+      if (changes.hashedPassword !== undefined) {
+        this.updatePassword(id, changes.hashedPassword);
+      }
+      if (changes.disabled !== undefined) {
+        this.updateDisabled(id, changes.disabled);
+      }
+      return true;
+    })();
+  }
+
   /** Atomically check existence + delete. Returns false if user not found. */
   removeIfFound(id: number): boolean {
     return this.db.transaction(() => {
