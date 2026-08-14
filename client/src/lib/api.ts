@@ -135,7 +135,9 @@ export function notifyUnauthorized(): void {
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getStoredToken();
   const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
+  if (init.body != null) {
+    headers.set("Content-Type", "application/json");
+  }
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
