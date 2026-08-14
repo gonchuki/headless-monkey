@@ -36,7 +36,7 @@ export function useEntries(schemaName: string, enabled = true, pagination?: Pagi
   const queryClient = useQueryClient();
   const key = pagination
     ? [...queryKeys.entries(schemaName), { pagination }, { sort }] as const
-    : queryKeys.entries(schemaName);
+    : [...queryKeys.entries(schemaName), { sort }] as const;
 
   const query = useQuery<PaginatedEntries | ContentListEntry[]>({
     queryKey: key,
