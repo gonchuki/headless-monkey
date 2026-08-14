@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
-import { ArrowLeft, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, ArrowLeft, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { Skeleton } from "@/components/shared/Skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -23,7 +23,7 @@ import {
 import { toast } from "@/components/ui/toast";
 import { useAllEntries } from "@/hooks/useAllEntries";
 import { useEntries } from "@/hooks/useEntries";
-import type { PaginationParams } from "@/hooks/useEntries";
+import type { PaginationParams, SortParams } from "@/hooks/useEntries";
 import { useRealtime } from "@/hooks/useRealtime";
 import { useSchemas } from "@/hooks/useSchemas";
 import type { ContentListEntry, PaginationResponse } from "@/lib/api";
@@ -41,21 +41,25 @@ function errorMessage(error: unknown): string | undefined {
 }
 
 /** Derive a stable list URL for editor return flows. */
-function buildListUrl(opts: { allView: boolean; selected: string | null; conflictedOnly: boolean }): string {
+function buildListUrl(opts: { allView: boolean; selected: string | null; conflictedOnly: boolean; sortField?: string | null; sortOrder?: string | null }): string {
   const base = opts.allView ? "/content" : `/content/${encodeURIComponent(opts.selected ?? "")}`;
   const params = new URLSearchParams();
   if (opts.conflictedOnly) params.set("conflicted", "1");
+  if (opts.sortField) params.set("sort_field", opts.sortField);
+  if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
   const qs = params.toString();
   return qs ? `${base}?${qs}` : base;
 }
 
-/** Build a URL for a specific page, preserving conflicted filter. */
+/** Build a URL for a specific page, preserving conflicted filter and sort. */
 function buildPageUrl(opts: {
   allView: boolean;
   selected: string | null;
   conflictedOnly: boolean;
   targetPage: number;
   pagination?: PaginationParams;
+  sortField?: string | null;
+  sortOrder?: string | null;
 }): string {
   const base = opts.allView ? "/content" : `/content/${encodeURIComponent(opts.selected ?? "")}`;
   const params = new URLSearchParams();
@@ -68,6 +72,8 @@ function buildPageUrl(opts: {
       params.set("cursor_prev", String(opts.pagination.cursor));
     }
   }
+  if (opts.sortField) params.set("sort_field", opts.sortField);
+  if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
   const qs = params.toString();
   return qs ? `${base}?${qs}` : base;
 }
@@ -84,6 +90,13 @@ export default function ContentPage() {
   const allView = selected == null;
   const conflictedOnly = searchParams.get("conflicted") === "1";
 
+  // Sort state from URL
+  const sortFieldRaw = searchParams.get("sort_field");
+  const sortOrderRaw = searchParams.get("sort_order");
+  const sortField = sortFieldRaw ?? "id";
+  const sortOrder: "asc" | "desc" = sortOrderRaw === "asc" ? "asc" : "desc";
+  const sort: SortParams = { sortField, sortOrder };
+
   // Pagination state from URL
   const page = Number(searchParams.get("page")) || 1;
   const cursorNext = searchParams.get("cursor_next");
@@ -98,14 +111,14 @@ export default function ContentPage() {
       }
     : undefined;
 
-  const listUrl = buildListUrl({ allView, selected, conflictedOnly });
+  const listUrl = buildListUrl({ allView, selected, conflictedOnly, sortField: sortFieldRaw, sortOrder: sortOrderRaw });
 
   // The delete mutation is always keyed to the deleted entry's own schema
   const deleteSource = useEntries(entryToDelete?.schema ?? "");
   const remove = deleteSource.remove;
 
   // Filtered view: always pass pagination params (undefined on first page = non-paginated)
-  const filtered = useEntries(selected ?? "", true, paginationParams);
+  const filtered = useEntries(selected ?? "", true, paginationParams, allView ? undefined : sort);
 
   const allEntriesQuery = useAllEntries(allView ? schemas.map((schema) => schema.name) : [], paginationParams);
 
@@ -174,6 +187,8 @@ export default function ContentPage() {
         conflictedOnly,
         targetPage: page + 1,
         pagination: { limit: PAGE_LIMIT, cursor: pagination.nextCursor, direction: "forward" },
+        sortField: sortFieldRaw,
+        sortOrder: sortOrderRaw,
       }),
     );
   }
@@ -187,6 +202,8 @@ export default function ContentPage() {
         conflictedOnly,
         targetPage: page - 1,
         pagination: { limit: PAGE_LIMIT, cursor: pagination.prevCursor, direction: "backward" },
+        sortField: sortFieldRaw,
+        sortOrder: sortOrderRaw,
       }),
     );
   }
@@ -252,54 +269,143 @@ export default function ContentPage() {
 
       {schemas.length > 0 && (
         <div className="flex flex-row justify-between items-end">
-          <div className="grid max-w-xs gap-1.5">
-            <Label htmlFor="content-schema">Schema</Label>
-            <Select
-              value={selected ?? ALL_SCHEMAS_VALUE}
-              onValueChange={(value) => {
-                if (value == null) return;
-                // Reset pagination on schema change
-                const base = value === ALL_SCHEMAS_VALUE ? "/content" : `/content/${encodeURIComponent(value)}`;
-                const params = new URLSearchParams();
-                if (conflictedOnly) params.set("conflicted", "1");
-                const qs = params.toString();
-                navigate(qs ? `${base}?${qs}` : base);
-              }}
-            >
-              <SelectTrigger id="content-schema">
-                <SelectValue>
-                  {(value) => {
-                    if (!value || value === ALL_SCHEMAS_VALUE) {
+          <div className="flex flex-row gap-3 items-end">
+            <div className="grid max-w-xs gap-1.5">
+              <Label htmlFor="content-schema">Schema</Label>
+              <Select
+                value={selected ?? ALL_SCHEMAS_VALUE}
+                onValueChange={(value) => {
+                  if (value == null) return;
+                  // Reset pagination and sort on schema change
+                  const base = value === ALL_SCHEMAS_VALUE ? "/content" : `/content/${encodeURIComponent(value)}`;
+                  const params = new URLSearchParams();
+                  if (conflictedOnly) params.set("conflicted", "1");
+                  const qs = params.toString();
+                  navigate(qs ? `${base}?${qs}` : base);
+                }}
+              >
+                <SelectTrigger id="content-schema">
+                  <SelectValue>
+                    {(value) => {
+                      if (!value || value === ALL_SCHEMAS_VALUE) {
+                        return (
+                          <>
+                            <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
+                            All schemas
+                          </>
+                        )
+                      }
+
                       return (
                         <>
-                          <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
-                          All schemas
+                          <SchemaBadge bgcolor={schemaColor(value).background} />
+                          {value}
                         </>
                       )
-                    }
-
-                    return (
-                      <>
-                        <SchemaBadge bgcolor={schemaColor(value).background} />
-                        {value}
-                      </>
-                    )
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_SCHEMAS_VALUE}>
-                  <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
-                  All schemas
-                </SelectItem>
-                {schemas.map((schema) => (
-                  <SelectItem key={schema.name} value={schema.name}>
-                    <SchemaBadge bgcolor={schemaColor(schema.name).background} className="self-center" />
-                    {schema.name}
+                    }}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_SCHEMAS_VALUE}>
+                    <span className="h-1 w-4 self-center border-dotted border-t-2 border-t-gray-600" />
+                    All schemas
                   </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                  {schemas.map((schema) => (
+                    <SelectItem key={schema.name} value={schema.name}>
+                      <SchemaBadge bgcolor={schemaColor(schema.name).background} className="self-center" />
+                      {schema.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Sort selector — only when a schema is selected */}
+            {selected != null && (() => {
+              const selectedSchema = schemas.find((s) => s.name === selected);
+              const sortableFields = selectedSchema?.fields.filter((f) =>
+                f.type === "text" || f.type === "number" || f.type === "date"
+              ) ?? [];
+              const selectedSchemaName = selected;
+
+              function handleSortChange(newValue: string | null) {
+                if (newValue == null) return;
+                const params = new URLSearchParams();
+                if (conflictedOnly) params.set("conflicted", "1");
+                // Preset options encode both field and order
+                if (newValue === "newest") {
+                  params.set("sort_field", "id");
+                  params.set("sort_order", "desc");
+                } else if (newValue === "oldest") {
+                  params.set("sort_field", "id");
+                  params.set("sort_order", "asc");
+                } else if (newValue === "date") {
+                  params.set("sort_field", "date");
+                  params.set("sort_order", "asc");
+                } else {
+                  // Custom field: use field id, default asc
+                  params.set("sort_field", newValue);
+                  params.set("sort_order", "asc");
+                }
+                const qs = params.toString();
+                navigate(`/content/${encodeURIComponent(selectedSchemaName)}?${qs}`);
+              }
+
+              function handleSortOrderToggle() {
+                const newOrder = sortOrder === "asc" ? "desc" : "asc";
+                const params = new URLSearchParams();
+                if (conflictedOnly) params.set("conflicted", "1");
+                params.set("sort_field", sortField);
+                params.set("sort_order", newOrder);
+                const qs = params.toString();
+                navigate(`/content/${encodeURIComponent(selectedSchemaName)}?${qs}`);
+              }
+
+              // Derive select value from current URL sort state
+              const selectValue = sortField === "id" && sortOrder === "desc"
+                ? "newest"
+                : sortField === "id" && sortOrder === "asc"
+                  ? "oldest"
+                  : sortField === "date"
+                    ? "date"
+                    : sortField;
+
+              return (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="content-sort">Sort by</Label>
+                  <div className="flex items-center gap-1">
+                    <Select value={selectValue} onValueChange={handleSortChange}>
+                      <SelectTrigger id="content-sort" className="w-[180px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="newest">Newest first</SelectItem>
+                        <SelectItem value="oldest">Oldest first</SelectItem>
+                        <SelectItem value="date">Creation date</SelectItem>
+                        {sortableFields.map((field) => (
+                          <SelectItem key={field.id} value={String(field.id)}>
+                            {field.label} ({field.type})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      aria-label={`Sort ${sortOrder === "asc" ? "descending" : "ascending"}`}
+                      onClick={handleSortOrderToggle}
+                    >
+                      {sortOrder === "asc" ? (
+                        <ArrowUp className="size-4" aria-hidden="true" />
+                      ) : (
+                        <ArrowDown className="size-4" aria-hidden="true" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
           <div className="flex items-center gap-2">
             <Switch
