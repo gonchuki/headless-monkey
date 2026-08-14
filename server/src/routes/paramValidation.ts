@@ -1,5 +1,5 @@
 import { Request, RequestHandler } from "express";
-import type { PaginationParams } from "../types";
+import type { PaginationParams, SortParams } from "../types";
 
 /**
  * Express middleware that validates a route parameter is a positive integer.
@@ -50,6 +50,44 @@ export function parsePaginationParams(req: Request): PaginationParams | undefine
   const dir = req.query.direction;
   if (dir === "forward" || dir === "backward") {
     params.direction = dir;
+  }
+
+  return params;
+}
+
+/**
+ * Parse sort query params (sort_field, sort_order).
+ * Returns `undefined` when no sort params are present.
+ * Throws with statusCode 422 for invalid sort_field values.
+ */
+export function parseSortParams(req: Request): SortParams | undefined {
+  const hasField = req.query.sort_field !== undefined;
+  const hasOrder = req.query.sort_order !== undefined;
+
+  if (!hasField && !hasOrder) return undefined;
+
+  const params: SortParams = { sortField: "id" };
+
+  if (hasField) {
+    const raw = String(req.query.sort_field);
+    if (raw === "id" || raw === "date") {
+      params.sortField = raw;
+    } else {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || String(n) !== raw.trim()) {
+        throw { statusCode: 422, message: "Invalid sort_field: must be 'id', 'date', or a positive integer" };
+      }
+      params.sortField = n;
+    }
+  }
+
+  if (hasOrder) {
+    const raw = String(req.query.sort_order);
+    if (raw === "asc" || raw === "desc") {
+      params.sortOrder = raw;
+    } else {
+      throw { statusCode: 422, message: "Invalid sort_order: must be 'asc' or 'desc'" };
+    }
   }
 
   return params;

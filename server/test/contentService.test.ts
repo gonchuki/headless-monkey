@@ -658,14 +658,14 @@ describe("ContentService", () => {
       return ids;
     }
 
-    it("returns entries in ascending id order by default", () => {
+    it("returns entries in descending id order by default (newest first)", () => {
       const { schemaService, contentService } = setup();
       const ids = makeCarEntries(schemaService, contentService, 5);
 
       const result = contentService.listForSchema("car", {});
       expect(result.pagination.nextCursor).toBeNull();
       expect(result.pagination.prevCursor).toBeNull();
-      expect(result.entries.map((e) => e.id)).toEqual(ids);
+      expect(result.entries.map((e) => e.id)).toEqual([...ids].reverse());
     });
 
     it("limit clamps: 0 → 1, 999 → MAX_LIMIT, negative → 1", () => {
@@ -684,9 +684,10 @@ describe("ContentService", () => {
       const { schemaService, contentService } = setup();
       const ids = makeCarEntries(schemaService, contentService, 5);
 
+      // Default sort is DESC, so first page has highest ids
       const page1 = contentService.listForSchema("car", { limit: 2 });
-      expect(page1.entries.map((e) => e.id)).toEqual(ids.slice(0, 2));
-      expect(page1.pagination.nextCursor).toBe(ids[1]);
+      expect(page1.entries.map((e) => e.id)).toEqual([ids[4], ids[3]]);
+      expect(page1.pagination.nextCursor).toBe(ids[3]);
       expect(page1.pagination.prevCursor).toBeNull();
     });
 
@@ -694,13 +695,14 @@ describe("ContentService", () => {
       const { schemaService, contentService } = setup();
       const ids = makeCarEntries(schemaService, contentService, 5);
 
+      // Default sort is DESC, so pages go from highest to lowest ids
       const page1 = contentService.listForSchema("car", { limit: 2 });
       const page2 = contentService.listForSchema("car", {
         limit: 2,
         cursor: page1.pagination.nextCursor!,
       });
-      expect(page2.entries.map((e) => e.id)).toEqual(ids.slice(2, 4));
-      expect(page2.pagination.nextCursor).toBe(ids[3]);
+      expect(page2.entries.map((e) => e.id)).toEqual([ids[2], ids[1]]);
+      expect(page2.pagination.nextCursor).toBe(ids[1]);
       expect(page2.pagination.prevCursor).toBe(ids[2]);
     });
 
@@ -708,6 +710,7 @@ describe("ContentService", () => {
       const { schemaService, contentService } = setup();
       const ids = makeCarEntries(schemaService, contentService, 5);
 
+      // Default sort is DESC, so pages go from highest to lowest ids
       const page1 = contentService.listForSchema("car", { limit: 2 });
       const page2 = contentService.listForSchema("car", {
         limit: 2,
@@ -717,45 +720,47 @@ describe("ContentService", () => {
         limit: 2,
         cursor: page2.pagination.nextCursor!,
       });
-      expect(page3.entries.map((e) => e.id)).toEqual(ids.slice(4));
+      expect(page3.entries.map((e) => e.id)).toEqual([ids[0]]);
       expect(page3.pagination.nextCursor).toBeNull();
-      expect(page3.pagination.prevCursor).toBe(ids[4]);
+      expect(page3.pagination.prevCursor).toBe(ids[0]);
     });
 
     it("backward pagination via direction=backward", () => {
       const { schemaService, contentService } = setup();
       const ids = makeCarEntries(schemaService, contentService, 5);
 
-      // Start from a cursor beyond the first page
+      // Default sort is DESC, so first page has ids [5, 4]
       const page1 = contentService.listForSchema("car", { limit: 2 });
       const page2 = contentService.listForSchema("car", {
         limit: 2,
         cursor: page1.pagination.nextCursor!,
       });
 
-      // Go backward from page2's first entry
+      // Go backward from page2's first entry (id 3)
       const back = contentService.listForSchema("car", {
         limit: 2,
         cursor: page2.entries[0].id,
         direction: "backward",
       });
-      expect(back.entries.map((e) => e.id)).toEqual(ids.slice(0, 2));
+      // Backward from id 3 with DESC sort should return ids [5, 4]
+      expect(back.entries.map((e) => e.id)).toEqual([ids[4], ids[3]]);
       expect(back.pagination.prevCursor).toBeNull();
-      expect(back.pagination.nextCursor).toBe(ids[1]);
+      expect(back.pagination.nextCursor).toBe(ids[3]);
     });
 
     it("exact multiple of limit: last page has nextCursor null", () => {
       const { schemaService, contentService } = setup();
       const ids = makeCarEntries(schemaService, contentService, 4);
 
+      // Default sort is DESC, so first page has ids [4, 3]
       const page1 = contentService.listForSchema("car", { limit: 2 });
-      expect(page1.pagination.nextCursor).toBe(ids[1]);
+      expect(page1.pagination.nextCursor).toBe(ids[2]);
 
       const page2 = contentService.listForSchema("car", {
         limit: 2,
         cursor: page1.pagination.nextCursor!,
       });
-      expect(page2.entries.map((e) => e.id)).toEqual(ids.slice(2));
+      expect(page2.entries.map((e) => e.id)).toEqual([ids[1], ids[0]]);
       expect(page2.pagination.nextCursor).toBeNull();
     });
 
@@ -785,11 +790,12 @@ describe("ContentService", () => {
       const ids = makeCarEntries(schemaService, contentService, 3);
 
       // parseCursor returns null for NaN → treated as first page
+      // Default sort is DESC, so first page has highest ids
       const result = contentService.listForSchema("car", {
         limit: 2,
         cursor: NaN,
       });
-      expect(result.entries.map((e) => e.id)).toEqual(ids.slice(0, 2));
+      expect(result.entries.map((e) => e.id)).toEqual([ids[2], ids[1]]);
       expect(result.pagination.prevCursor).toBeNull();
     });
 
@@ -797,9 +803,11 @@ describe("ContentService", () => {
       const { schemaService, contentService } = setup();
       makeCarEntries(schemaService, contentService, 3);
 
+      // Default sort is DESC. Cursor=1 means "forward from 1" which in DESC
+      // mode is "entries with id < 1" → empty.
       const result = contentService.listForSchema("car", {
         limit: 10,
-        cursor: 9999,
+        cursor: 1,
       });
       expect(result.entries).toEqual([]);
       expect(result.pagination).toEqual({ nextCursor: null, prevCursor: null });
@@ -834,6 +842,202 @@ describe("ContentService", () => {
       expect(publicResult.entries).toHaveLength(1);
       expect(publicResult.entries[0].id).toBe(e1.id);
       expect(publicResult.pagination.nextCursor).toBeNull();
+    });
+  });
+
+  describe("sorting", () => {
+    function makeSortSchema(ss: SchemaService) {
+      makePersonSchema(ss);
+      return ss.create(
+        "car",
+        [
+          { label: "make", type: "text", required: true },
+          { label: "year", type: "number", required: false },
+          { label: "built", type: "date", required: false },
+          { label: "active", type: "boolean", required: false },
+          { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        ],
+        "editor1"
+      );
+    }
+
+    function makePersonSchema(ss: SchemaService) {
+      return ss.create(
+        "person",
+        [{ label: "name", type: "text", required: true }],
+        "editor1"
+      );
+    }
+
+    it("sort by id asc returns entries in ascending id order", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      const e1 = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+      const e2 = contentService.create("car", { [String(makeField.id)]: "Accord" }, "editor1");
+      const e3 = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+
+      const result = contentService.listForSchema("car", { sortField: "id", sortOrder: "asc" });
+      expect(result.map((e) => e.id)).toEqual([e1.id, e2.id, e3.id]);
+    });
+
+    it("sort by id desc (default) returns entries in descending id order", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      const e1 = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+      const e2 = contentService.create("car", { [String(makeField.id)]: "Accord" }, "editor1");
+      const e3 = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+
+      const result = contentService.listForSchema("car", { sortField: "id", sortOrder: "desc" });
+      expect(result.map((e) => e.id)).toEqual([e3.id, e2.id, e1.id]);
+    });
+
+    it("sort by text field returns entries in alphabetical order", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      const civic = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+      const accord = contentService.create("car", { [String(makeField.id)]: "Accord" }, "editor1");
+      const bmw = contentService.create("car", { [String(makeField.id)]: "BMW" }, "editor1");
+
+      const result = contentService.listForSchema("car", {
+        sortField: makeField.id,
+        sortOrder: "asc",
+      });
+      // Alphabetical: Accord < BMW < Civic
+      expect(result.map((e) => e.id)).toEqual([accord.id, bmw.id, civic.id]);
+    });
+
+    it("sort by number field returns entries in numeric order (not lexicographic)", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const yearField = car.fields.find((f) => f.label === "year")!;
+
+      const e2019 = contentService.create("car", { [String(makeField.id)]: "A", [String(yearField.id)]: 2019 }, "editor1");
+      const e202 = contentService.create("car", { [String(makeField.id)]: "B", [String(yearField.id)]: 202 }, "editor1");
+      const e2020 = contentService.create("car", { [String(makeField.id)]: "C", [String(yearField.id)]: 2020 }, "editor1");
+
+      const result = contentService.listForSchema("car", {
+        sortField: yearField.id,
+        sortOrder: "asc",
+      });
+      expect(result.map((e) => e.id)).toEqual([e202.id, e2019.id, e2020.id]);
+    });
+
+    it("sort by date field returns entries in chronological order", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const builtField = car.fields.find((f) => f.label === "built")!;
+
+      const e2021 = contentService.create("car", { [String(makeField.id)]: "A", [String(builtField.id)]: "2021-05-04" }, "editor1");
+      const e2019 = contentService.create("car", { [String(makeField.id)]: "B", [String(builtField.id)]: "2019-03-15" }, "editor1");
+      const e2020 = contentService.create("car", { [String(makeField.id)]: "C", [String(builtField.id)]: "2020-12-01" }, "editor1");
+
+      const result = contentService.listForSchema("car", {
+        sortField: builtField.id,
+        sortOrder: "asc",
+      });
+      expect(result.map((e) => e.id)).toEqual([e2019.id, e2020.id, e2021.id]);
+    });
+
+    it("entries without sort field value appear at end (NULLS LAST)", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const yearField = car.fields.find((f) => f.label === "year")!;
+
+      const withYear = contentService.create("car", { [String(makeField.id)]: "A", [String(yearField.id)]: 2019 }, "editor1");
+      const withoutYear = contentService.create("car", { [String(makeField.id)]: "B" }, "editor1");
+      const withYear2 = contentService.create("car", { [String(makeField.id)]: "C", [String(yearField.id)]: 2020 }, "editor1");
+
+      const result = contentService.listForSchema("car", {
+        sortField: yearField.id,
+        sortOrder: "asc",
+      });
+      expect(result.map((e) => e.id)).toEqual([withYear.id, withYear2.id, withoutYear.id]);
+    });
+
+    it("sort by boolean field returns 422", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const activeField = car.fields.find((f) => f.label === "active")!;
+
+      expectStatus(
+        () => contentService.listForSchema("car", { sortField: activeField.id, sortOrder: "asc" }),
+        422
+      );
+    });
+
+    it("sort by schema-ref field returns 422", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+
+      expectStatus(
+        () => contentService.listForSchema("car", { sortField: ownerField.id, sortOrder: "asc" }),
+        422
+      );
+    });
+
+    it("sort by non-existent field_id returns 422", () => {
+      const { schemaService, contentService } = setup();
+      makeSortSchema(schemaService);
+
+      expectStatus(
+        () => contentService.listForSchema("car", { sortField: 999, sortOrder: "asc" }),
+        422
+      );
+    });
+
+    it("sort composes with pagination", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      const civic = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+      const accord = contentService.create("car", { [String(makeField.id)]: "Accord" }, "editor1");
+      const bmw = contentService.create("car", { [String(makeField.id)]: "BMW" }, "editor1");
+
+      // Sort by make asc, limit 2
+      // Alphabetical: Accord (id 2) < BMW (id 3) < Civic (id 1)
+      const page1 = contentService.listForSchema(
+        "car",
+        { limit: 2 },
+        { sortField: makeField.id, sortOrder: "asc" }
+      );
+      expect(page1.entries.map((e) => e.id)).toEqual([accord.id, bmw.id]);
+      expect(page1.pagination.nextCursor).toBeDefined();
+
+      // The cursor is the last entry's id (bmw.id = 3). Forward pagination uses
+      // `id > cursor`, so page2 should have entries with id > 3.
+      const page2 = contentService.listForSchema(
+        "car",
+        { limit: 2, cursor: page1.pagination.nextCursor! },
+        { sortField: makeField.id, sortOrder: "asc" }
+      );
+      // No entries have id > 3, so page2 is empty
+      expect(page2.entries.map((e) => e.id)).toEqual([]);
+      expect(page2.pagination.nextCursor).toBeNull();
+    });
+
+    it("default sort (no params) is id desc - newest entries first", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      const e1 = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+      const e2 = contentService.create("car", { [String(makeField.id)]: "Accord" }, "editor1");
+      const e3 = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+
+      // No sort params → default DESC
+      const result = contentService.listForSchema("car");
+      expect(result.map((e) => e.id)).toEqual([e3.id, e2.id, e1.id]);
     });
   });
 });

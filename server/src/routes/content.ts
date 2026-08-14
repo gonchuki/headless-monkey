@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import type { ContentService, ContentEntry, ContentValue } from "../services/contentService";
 import type { SchemaEntry, PaginationResponse } from "../types";
-import { validateNumericParam, parsePaginationParams } from "./paramValidation";
+import { validateNumericParam, parsePaginationParams, parseSortParams } from "./paramValidation";
 
 interface ServiceError {
   statusCode: number;
@@ -83,14 +83,18 @@ export function createContentRouter(contentService: ContentService): Router {
       const schema = contentService.getSchema(schemaName);
       const labelToId = new Map(schema.fields.map((f) => [f.label, f.id]));
       const pagination = parsePaginationParams(req);
+      const sort = parseSortParams(req);
 
       let entries: ContentEntry[];
       let paginationResponse: PaginationResponse;
 
       if (pagination !== undefined) {
-        const result = contentService.listPublic(schemaName, pagination);
+        const result = contentService.listPublic(schemaName, pagination, sort);
         entries = result.entries;
         paginationResponse = result.pagination;
+      } else if (sort !== undefined) {
+        entries = contentService.listPublic(schemaName, sort);
+        paginationResponse = { nextCursor: null, prevCursor: null };
       } else {
         entries = contentService.listPublic(schemaName);
         paginationResponse = { nextCursor: null, prevCursor: null };

@@ -5,7 +5,7 @@ import {
   coerceScalarValue,
   isScalarValueValid,
 } from "./fieldValidation";
-import type { FieldWithId, SchemaEntry, PaginationParams, PaginationResponse } from "../types";
+import type { FieldWithId, SchemaEntry, PaginationParams, PaginationResponse, SortParams, ResolvedSortParams } from "../types";
 
 export interface SchemaRefValue {
   id: number;
@@ -153,17 +153,43 @@ export class ContentService {
   listForSchema(schemaName: string): ContentListEntry[];
   listForSchema(
     schemaName: string,
-    pagination: PaginationParams
+    pagination: PaginationParams,
+    sort?: SortParams
   ): { entries: ContentListEntry[]; pagination: PaginationResponse };
   listForSchema(
     schemaName: string,
-    pagination?: PaginationParams
+    sort: SortParams
+  ): ContentListEntry[];
+  listForSchema(
+    schemaName: string,
+    paginationOrSort?: PaginationParams | SortParams,
+    sort?: SortParams
   ):
     | ContentListEntry[]
     | { entries: ContentListEntry[]; pagination: PaginationResponse } {
     const schema = this.requireSchema(schemaName);
+
+    // Determine if first arg is pagination or sort.
+    // SortParams requires sortField (a number or 'id' or 'date');
+    // PaginationParams has only optional fields (limit, cursor, direction).
+    // When the first arg has sortField, it's a sort; otherwise treat as pagination.
+    let pagination: PaginationParams | undefined;
+    let resolvedSort: ResolvedSortParams | undefined;
+
+    if (paginationOrSort && "sortField" in paginationOrSort) {
+      resolvedSort = this.resolveSort(schema, paginationOrSort as SortParams);
+      if (sort) {
+        // sort was passed as a third arg alongside a sort-first arg — shouldn't happen,
+        // but handle it by using the third arg as the actual sort.
+        resolvedSort = this.resolveSort(schema, sort);
+      }
+    } else if (paginationOrSort) {
+      pagination = paginationOrSort as PaginationParams;
+      resolvedSort = sort ? this.resolveSort(schema, sort) : undefined;
+    }
+
     if (pagination !== undefined) {
-      const result = this.repo.listEntriesPaginated(schemaName, pagination);
+      const result = this.repo.listEntriesPaginated(schemaName, pagination, resolvedSort);
       return {
         entries: result.entries.map((entry) =>
           this.toEntry(entry, schema, true, "editor")
@@ -172,24 +198,44 @@ export class ContentService {
       };
     }
     return this.repo
-      .listEntries(schemaName)
+      .listEntries(schemaName, resolvedSort)
       .map((entry) => this.toEntry(entry, schema, true, "editor"));
   }
 
   listPublic(schemaName: string): ContentEntry[];
   listPublic(
     schemaName: string,
-    pagination: PaginationParams
+    pagination: PaginationParams,
+    sort?: SortParams
   ): { entries: ContentEntry[]; pagination: PaginationResponse };
   listPublic(
     schemaName: string,
-    pagination?: PaginationParams
+    sort: SortParams
+  ): ContentEntry[];
+  listPublic(
+    schemaName: string,
+    paginationOrSort?: PaginationParams | SortParams,
+    sort?: SortParams
   ):
     | ContentEntry[]
     | { entries: ContentEntry[]; pagination: PaginationResponse } {
     const schema = this.requireSchema(schemaName);
+
+    let pagination: PaginationParams | undefined;
+    let resolvedSort: ResolvedSortParams | undefined;
+
+    if (paginationOrSort && "sortField" in paginationOrSort) {
+      resolvedSort = this.resolveSort(schema, paginationOrSort as SortParams);
+      if (sort) {
+        resolvedSort = this.resolveSort(schema, sort);
+      }
+    } else if (paginationOrSort) {
+      pagination = paginationOrSort as PaginationParams;
+      resolvedSort = sort ? this.resolveSort(schema, sort) : undefined;
+    }
+
     if (pagination !== undefined) {
-      const result = this.repo.listEntriesPaginated(schemaName, pagination);
+      const result = this.repo.listEntriesPaginated(schemaName, pagination, resolvedSort);
       return {
         entries: result.entries
           .filter((entry) => entry.record.schema_version >= schema.compat_version)
@@ -198,7 +244,7 @@ export class ContentService {
       };
     }
     return this.repo
-      .listEntries(schemaName)
+      .listEntries(schemaName, resolvedSort)
       .filter((entry) => entry.record.schema_version >= schema.compat_version)
       .map((entry) => this.toEntry(entry, schema, false));
   }
@@ -224,6 +270,28 @@ export class ContentService {
       throw new ContentServiceError(404, `Schema '${schemaName}' not found`);
     }
     return schema;
+  }
+
+  private resolveSort(schema: SchemaEntry, sort: SortParams): ResolvedSortParams {
+    const sortOrder = sort.sortOrder ?? "asc";
+
+    if (sort.sortField === "id" || sort.sortField === "date") {
+      return { sortField: sort.sortField, sortOrder };
+    }
+
+    // Validate field_id
+    const field = schema.fields.find((f) => f.id === sort.sortField);
+    if (!field) {
+      throw new ContentServiceError(422, `Unknown sort field_id: ${sort.sortField}`);
+    }
+    if (field.type === "boolean" || field.type === "schema-ref") {
+      throw new ContentServiceError(
+        422,
+        `Cannot sort by field '${field.label}' (type: ${field.type})`
+      );
+    }
+
+    return { sortField: sort.sortField, sortOrder, sortFieldType: field.type };
   }
 
   private requireEntry(id: number): ContentEntryRow {
