@@ -228,7 +228,8 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
       expect(accord.status).toBe(201);
 
       const served = await expectPublicReadClean(app, db, schemaService, "car");
-      expect(served.map((e) => e.id)).toEqual([civic.body.id, accord.body.id]);
+      // Default sort is DESC, so accord (higher id) comes first
+      expect(served.map((e) => e.id)).toEqual([accord.body.id, civic.body.id]);
 
       for (const entry of served) {
         expect(entry.values[String(ownerField.id)]).toEqual(
@@ -318,7 +319,8 @@ describe("Read-path referential integrity proofs (PLAN-29)", () => {
 
       // The car entries remain but their refs are cleared — no dangling values.
       const afterDelete = await expectPublicReadClean(app, db, schemaService, "car");
-      expect(afterDelete.map((e) => e.id)).toEqual([civic.body.id, accord.body.id]);
+      // Default sort is DESC, so accord (higher id) comes first
+      expect(afterDelete.map((e) => e.id)).toEqual([accord.body.id, civic.body.id]);
       for (const entry of afterDelete) {
         // The ref is absent since clearing refs removed it on Alice's deletion.
         expect(entry.values).not.toHaveProperty(String(ownerField.id));

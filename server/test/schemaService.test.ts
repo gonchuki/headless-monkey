@@ -1681,8 +1681,8 @@ describe("SchemaService", () => {
 
       expect(preview.breaking).toBe(true);
       expect(preview.affectedEntries).toEqual([
-        { id: e1, label: "Toyota", affectedFieldIds: [] },
         { id: e2, label: "Honda", affectedFieldIds: [] },
+        { id: e1, label: "Toyota", affectedFieldIds: [] },
       ]);
     });
 

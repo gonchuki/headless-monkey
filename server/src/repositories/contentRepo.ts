@@ -1,5 +1,5 @@
 import type { Db } from "../db/database";
-import type { PaginationParams, PaginationResponse } from "../types";
+import type { PaginationParams, PaginationResponse, ResolvedSortParams } from "../types";
 import { clampLimit, parseCursor } from "../types";
 
 export interface ContentRecord {
@@ -157,10 +157,14 @@ export class ContentRepository {
     return { record, rows, refs };
   }
 
-  listEntries(schema: string): ContentEntryRow[] {
+  listEntries(schema: string, sort?: ResolvedSortParams): ContentEntryRow[] {
+    const resolvedSort = sort ?? { sortField: "id", sortOrder: "desc" };
+    const orderClause = this.buildOrderClause(resolvedSort);
+    const joinClause = this.buildJoinClause(resolvedSort);
+
     const records = this.db
       .prepare(
-        "SELECT id, schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by, (SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count FROM content WHERE schema = ? ORDER BY id"
+        `SELECT content.id, content.schema, content.schema_version, content.creation_date, content.created_by, content.last_modified_date, content.last_modified_by, (SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count FROM content${joinClause} WHERE content.schema = ? ${orderClause}`
       )
       .all(schema) as ContentRecord[];
 
@@ -213,31 +217,52 @@ export class ContentRepository {
    */
   listEntriesPaginated(
     schema: string,
-    pagination: PaginationParams
+    pagination: PaginationParams,
+    sort?: ResolvedSortParams
   ): { entries: ContentEntryRow[]; pagination: PaginationResponse } {
     const limit = clampLimit(pagination.limit);
     const cursor = parseCursor(pagination.cursor);
     const direction = pagination.direction === "backward" ? "backward" : "forward";
 
-    const SELECT =
-      "SELECT id, schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by, " +
-      "(SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count " +
-      "FROM content";
+    const resolvedSort = sort ?? { sortField: "id", sortOrder: "desc" };
+    const orderClause = this.buildOrderClause(resolvedSort);
+    const joinClause = this.buildJoinClause(resolvedSort);
 
+    const SELECT =
+      "SELECT content.id, content.schema, content.schema_version, content.creation_date, content.created_by, content.last_modified_date, content.last_modified_by, " +
+      "(SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count " +
+      "FROM content" +
+      joinClause;
+
+    // Cursor-based pagination adapts to the sort order:
+    // - ASC sort: forward uses `id > cursor`, backward uses `id < cursor`
+    // - DESC sort: forward uses `id < cursor`, backward uses `id > cursor`
+    // The cursor is always a content.id; the ORDER BY handles display order.
+    // For backward queries, we fetch in the OPPOSITE sort order, then reverse
+    // to restore the forward display order.
+    const isAsc = resolvedSort.sortOrder === "asc";
     let records: ContentRecord[];
 
     if (cursor !== null && direction === "backward") {
+      // Backward: fetch entries "before" the cursor in display order.
+      // Use opposite ORDER BY direction, then reverse to restore display order.
+      const op = isAsc ? "content.id < ?" : "content.id > ?";
+      const reverseOrder = isAsc
+        ? this.buildOrderClause({ ...resolvedSort, sortOrder: "desc" })
+        : this.buildOrderClause({ ...resolvedSort, sortOrder: "asc" });
       records = this.db
-        .prepare(`${SELECT} WHERE schema = ? AND id < ? ORDER BY id DESC LIMIT ?`)
+        .prepare(`${SELECT} WHERE content.schema = ? AND ${op} ${reverseOrder} LIMIT ?`)
         .all(schema, cursor, limit + 1) as ContentRecord[];
-      records.reverse(); // restore ASC order
+      records.reverse(); // restore forward display order
     } else if (cursor !== null && direction === "forward") {
+      // Forward: fetch entries "after" the cursor in display order
+      const op = isAsc ? "content.id > ?" : "content.id < ?";
       records = this.db
-        .prepare(`${SELECT} WHERE schema = ? AND id > ? ORDER BY id ASC LIMIT ?`)
+        .prepare(`${SELECT} WHERE content.schema = ? AND ${op} ${orderClause} LIMIT ?`)
         .all(schema, cursor, limit + 1) as ContentRecord[];
     } else {
       records = this.db
-        .prepare(`${SELECT} WHERE schema = ? ORDER BY id ASC LIMIT ?`)
+        .prepare(`${SELECT} WHERE content.schema = ? ${orderClause} LIMIT ?`)
         .all(schema, limit + 1) as ContentRecord[];
     }
 
@@ -289,10 +314,12 @@ export class ContentRepository {
         hasMore
           ? records[records.length - 1].id
           : direction === "backward" && records.length > 0
-            ? // For backward pages, check if there are entries after the last one
+            ? // For backward pages, check if there are more entries in display order
               this.db
                 .prepare(
-                  "SELECT 1 FROM content WHERE schema = ? AND id > ? LIMIT 1"
+                  isAsc
+                    ? "SELECT 1 FROM content WHERE schema = ? AND id > ? LIMIT 1"
+                    : "SELECT 1 FROM content WHERE schema = ? AND id < ? LIMIT 1"
                 )
                 .get(schema, records[records.length - 1].id) !== undefined
               ? records[records.length - 1].id
@@ -300,10 +327,12 @@ export class ContentRepository {
             : null,
       prevCursor:
         cursor !== null && records.length > 0
-          ? // Check if there's at least one entry before the first on this page
+          ? // Check if there's at least one entry before the first on this page in display order
             this.db
               .prepare(
-                "SELECT 1 FROM content WHERE schema = ? AND id < ? LIMIT 1"
+                isAsc
+                  ? "SELECT 1 FROM content WHERE schema = ? AND id < ? LIMIT 1"
+                  : "SELECT 1 FROM content WHERE schema = ? AND id > ? LIMIT 1"
               )
               .get(schema, records[0].id) !== undefined
             ? records[0].id
@@ -320,5 +349,32 @@ export class ContentRepository {
         .prepare("SELECT 1 FROM content WHERE id = ? AND schema = ?")
         .get(id, schema) !== undefined
     );
+  }
+
+  /** Build the ORDER BY clause for the given sort params. */
+  private buildOrderClause(sort: ResolvedSortParams): string {
+    const dir = sort.sortOrder.toUpperCase();
+    const tiebreaker = sort.sortField === "id" ? "" : ", content.id ASC";
+
+    switch (sort.sortField) {
+      case "id":
+        return `ORDER BY content.id ${dir}`;
+      case "date":
+        return `ORDER BY content.creation_date ${dir} NULLS LAST${tiebreaker}`;
+      default: {
+        // Field id — value column is TEXT; numbers need CAST
+        const valueExpr =
+          sort.sortFieldType === "number"
+            ? "CAST(sort_field.value AS REAL)"
+            : "sort_field.value";
+        return `ORDER BY ${valueExpr} ${dir} NULLS LAST${tiebreaker}`;
+      }
+    }
+  }
+
+  /** Build a LEFT JOIN clause for field-based sorting; empty for id/date sorts. */
+  private buildJoinClause(sort: ResolvedSortParams): string {
+    if (typeof sort.sortField !== "number") return "";
+    return ` LEFT JOIN content_rows AS sort_field ON sort_field.content_id = content.id AND sort_field.field_id = ${Number(sort.sortField)}`;
   }
 }
