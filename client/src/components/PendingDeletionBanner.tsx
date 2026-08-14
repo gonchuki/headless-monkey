@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import type { SchemaDraft } from "@/hooks/useSchemas";
 import type { ContentListEntry } from "@/lib/api";
+import { entryLabel } from "@/lib/entries";
 
 export interface PendingDeletionBannerProps {
   /** Tombstoned fields in the draft; the banner renders when this is non-empty. */
@@ -27,6 +28,8 @@ export interface PendingDeletionBannerProps {
   entriesPending?: boolean;
   /** Copy explaining why Save is disabled (if the tombstones would leave the schema invalid). */
   blockReason?: string | null;
+  /** Field ID used to derive the human-readable entry label. */
+  labelFieldId: number | null;
 }
 
 export function PendingDeletionBanner({
@@ -35,6 +38,7 @@ export function PendingDeletionBanner({
   entries,
   entriesPending = false,
   blockReason = null,
+  labelFieldId,
 }: PendingDeletionBannerProps) {
   const [open, setOpen] = useState(false);
 
@@ -87,7 +91,7 @@ export function PendingDeletionBanner({
             <ul className="max-h-60 list-none space-y-1 overflow-auto rounded-md border bg-muted/40 p-2 text-sm">
               {entries.map((entry) => (
                 <li key={entry.id} className="flex items-baseline justify-between gap-3">
-                  <span className="min-w-0 truncate font-medium text-foreground">Entry #{entry.id}</span>
+                  <span className="min-w-0 truncate font-medium text-foreground">{entryLabel(entry, labelFieldId)}</span>
                 </li>
               ))}
             </ul>

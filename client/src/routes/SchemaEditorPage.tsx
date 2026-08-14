@@ -20,6 +20,7 @@ import {
   type SchemaDraft,
 } from "@/hooks/useSchemas";
 import { apiFetch, type SchemaEntry, type SchemaFieldInput } from "@/lib/api";
+import { schemaLabelField } from "@/lib/entries";
 import { queryKeys } from "@/lib/query";
 
 interface EditorState {
@@ -289,6 +290,8 @@ export default function SchemaEditorPage() {
     );
   }
 
+  const labelFieldId = schemaQuery.data ? schemaLabelField(schemaQuery.data) : null;
+
   if (!isCreateRoute && schemaQuery.isPending) {
     return <PageSkeleton />;
   }
@@ -376,6 +379,7 @@ export default function SchemaEditorPage() {
           entries={entriesListQuery.data}
           entriesPending={entriesListQuery.isPending}
           blockReason={saveBlockReason}
+          labelFieldId={labelFieldId}
         />
       )}
 
