@@ -132,17 +132,20 @@ export class SchemaService {
     fields: (FieldInput & { id?: number })[],
     modifiedBy: string
   ): SchemaEntry {
-    const {
-      newVersion,
-      compatVersion,
-      deletedFieldIds,
-      retargetedFieldIds,
-      unaffectedEntryIds,
-    } = this.validateAndComputeUpdate(name, fields);
-
-    // Wrap the write + post-update read in a transaction so a concurrent
-    // writer cannot interleave between updateSchemaFields and getSchema.
+    // Wrap the validation + write + post-update read in one transaction so a
+    // concurrent writer cannot interleave between the version read and the
+    // write. Without this, two concurrent PATCHes both read the same
+    // `existing.version`, compute the same `newVersion`, and the second
+    // writer silently overwrites the first (lost update).
     return this.db.transaction(() => {
+      const {
+        newVersion,
+        compatVersion,
+        deletedFieldIds,
+        retargetedFieldIds,
+        unaffectedEntryIds,
+      } = this.validateAndComputeUpdate(name, fields);
+
       this.repo.updateSchemaFields(
         name,
         fields,
@@ -168,30 +171,36 @@ export class SchemaService {
     name: string,
     fields: (FieldInput & { id?: number })[]
   ): SchemaUpdatePreview {
-    const {
-      existing,
-      newVersion,
-      isBreaking,
-      compatVersion,
-      deletedFieldIds,
-      retargetedFieldIds,
-    } = this.validateAndComputeUpdate(name, fields);
+    // Wrap all reads in a transaction so concurrent schema updates cannot
+    // interleave between the validation pass and the entry scan. Without this,
+    // a preview could see stale schema metadata but fresh entry data (or vice
+    // versa), reporting incorrect affectedEntryIds.
+    return this.db.transaction(() => {
+      const {
+        existing,
+        newVersion,
+        isBreaking,
+        compatVersion,
+        deletedFieldIds,
+        retargetedFieldIds,
+      } = this.validateAndComputeUpdate(name, fields);
 
-    const entries = this.contentRepo.listEntries(name);
-    const affectedEntries = this.buildPreviewEntries(
-      existing,
-      fields,
-      entries,
-      deletedFieldIds,
-      retargetedFieldIds
-    );
+      const entries = this.contentRepo.listEntries(name);
+      const affectedEntries = this.buildPreviewEntries(
+        existing,
+        fields,
+        entries,
+        deletedFieldIds,
+        retargetedFieldIds
+      );
 
-    return {
-      breaking: isBreaking,
-      version: newVersion,
-      compatVersion,
-      affectedEntries,
-    };
+      return {
+        breaking: isBreaking,
+        version: newVersion,
+        compatVersion,
+        affectedEntries,
+      };
+    })();
   }
 
   private validateAndComputeUpdate(
