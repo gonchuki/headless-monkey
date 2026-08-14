@@ -56,4 +56,34 @@ export class UserRepo {
   remove(id: number): void {
     this.db.prepare(`DELETE FROM users WHERE id = ?`).run(id);
   }
+
+  /** Atomically check existence + update password. Returns false if user not found. */
+  updatePasswordIfFound(id: number, hashedPassword: string): boolean {
+    return this.db.transaction(() => {
+      const user = this.findById(id);
+      if (!user) return false;
+      this.updatePassword(id, hashedPassword);
+      return true;
+    })();
+  }
+
+  /** Atomically check existence + update disabled. Returns false if user not found. */
+  updateDisabledIfFound(id: number, disabled: boolean): boolean {
+    return this.db.transaction(() => {
+      const user = this.findById(id);
+      if (!user) return false;
+      this.updateDisabled(id, disabled);
+      return true;
+    })();
+  }
+
+  /** Atomically check existence + delete. Returns false if user not found. */
+  removeIfFound(id: number): boolean {
+    return this.db.transaction(() => {
+      const user = this.findById(id);
+      if (!user) return false;
+      this.remove(id);
+      return true;
+    })();
+  }
 }
