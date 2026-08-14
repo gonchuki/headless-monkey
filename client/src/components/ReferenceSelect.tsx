@@ -34,18 +34,16 @@ export function ReferenceSelect({
   invalid = false,
   onChange,
 }: ReferenceSelectProps) {
-  const refSchema = field.ref_schema;
+  const { ref_schema: refSchema } = field;
 
   const schemaQuery = useQuery({
-    queryKey: queryKeys.schema(refSchema ?? ""),
-    queryFn: () => apiFetch<SchemaEntry>(`/api/schemas/${encodeURIComponent(refSchema ?? "")}`),
-    enabled: refSchema != null,
+    queryKey: queryKeys.schema(refSchema),
+    queryFn: () => apiFetch<SchemaEntry>(`/api/schemas/${encodeURIComponent(refSchema)}`),
   });
 
   const entriesQuery = useQuery({
-    queryKey: queryKeys.entries(refSchema ?? ""),
-    queryFn: () => apiFetch<ContentListEntry[]>(`/api/schemas/${encodeURIComponent(refSchema ?? "")}/entries`),
-    enabled: refSchema != null,
+    queryKey: queryKeys.entries(refSchema),
+    queryFn: () => apiFetch<ContentListEntry[]>(`/api/schemas/${encodeURIComponent(refSchema)}/entries`),
   });
 
   if (schemaQuery.isPending || entriesQuery.isPending) {
