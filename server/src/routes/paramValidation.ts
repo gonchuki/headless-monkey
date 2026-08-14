@@ -1,6 +1,12 @@
 import { Request, RequestHandler } from "express";
 import type { PaginationParams, SortParams } from "../types";
 
+export class ParamValidationError extends Error {
+  constructor(public statusCode: number, message: string) {
+    super(message);
+  }
+}
+
 /**
  * Express middleware that validates a route parameter is a positive integer.
  * Rejects non-numeric, zero, negative, and float values with 422.
@@ -75,7 +81,7 @@ export function parseSortParams(req: Request): SortParams | undefined {
     } else {
       const n = Number(raw);
       if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || String(n) !== raw.trim()) {
-        throw { statusCode: 422, message: "Invalid sort_field: must be 'id', 'date', or a positive integer" };
+        throw new ParamValidationError(422, "Invalid sort_field: must be 'id', 'date', or a positive integer");
       }
       params.sortField = n;
     }
@@ -86,7 +92,7 @@ export function parseSortParams(req: Request): SortParams | undefined {
     if (raw === "asc" || raw === "desc") {
       params.sortOrder = raw;
     } else {
-      throw { statusCode: 422, message: "Invalid sort_order: must be 'asc' or 'desc'" };
+      throw new ParamValidationError(422, "Invalid sort_order: must be 'asc' or 'desc'");
     }
   }
 
