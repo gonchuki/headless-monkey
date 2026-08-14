@@ -370,13 +370,21 @@ export default function ContentPage() {
                     ? "date"
                     : sortField;
 
+              const sortLabel =
+                selectValue === "newest" ? "Newest first"
+                : selectValue === "oldest" ? "Oldest first"
+                : selectValue === "date" ? "Creation date"
+                : sortableFields.find((f) => String(f.id) === selectValue)
+                  ? `${sortableFields.find((f) => String(f.id) === selectValue)!.label} (${sortableFields.find((f) => String(f.id) === selectValue)!.type})`
+                : sortField;
+
               return (
                 <div className="grid gap-1.5">
                   <Label htmlFor="content-sort">Sort by</Label>
                   <div className="flex items-center gap-1">
                     <Select value={selectValue} onValueChange={handleSortChange}>
                       <SelectTrigger id="content-sort" className="w-[180px]">
-                        <SelectValue />
+                        <SelectValue>{sortLabel}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="newest">Newest first</SelectItem>
