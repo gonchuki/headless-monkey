@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router, Request, Response, NextFunction } from "express";
 import { signToken } from "../auth/jwt";
 import { UserRepo } from "../repositories/userRepo";
@@ -22,10 +23,12 @@ export function createAuthRouter(
         return res.status(401).json({ error: "Invalid credentials" });
       }
 
-      // Admin login
+      // Admin login — constant-time comparison to prevent timing attacks
       if (login === "admin") {
         const env = loadAppEnv();
-        if (password === env.adminPassword) {
+        const adminBuf = Buffer.from(env.adminPassword);
+        const inputBuf = Buffer.from(password);
+        if (adminBuf.length === inputBuf.length && crypto.timingSafeEqual(adminBuf, inputBuf)) {
           const token = signToken("admin", "admin");
           return res.json({ token });
         }
