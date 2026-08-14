@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import type { ContentService } from "../services/contentService";
 import type { EventsEmitter } from "../services/events";
 import type { AuthRequest } from "../auth/requireAuth";
-import { validateNumericParam } from "./paramValidation";
+import { validateNumericParam, parsePaginationParams } from "./paramValidation";
 
 interface ServiceError {
   statusCode: number;
@@ -31,8 +31,14 @@ export function createEntriesRouter(
   router.get("/", (req: Request, res: Response) => {
     try {
       const name = typeof req.params.name === "string" ? req.params.name : "";
-      const entries = contentService.listForSchema(name);
-      res.json(entries);
+      const pagination = parsePaginationParams(req);
+      if (pagination !== undefined) {
+        const result = contentService.listForSchema(name, pagination);
+        res.json(result);
+      } else {
+        const entries = contentService.listForSchema(name);
+        res.json(entries);
+      }
     } catch (err) {
       handleError(res, err);
     }

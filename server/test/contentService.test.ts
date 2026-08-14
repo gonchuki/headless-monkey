@@ -6,6 +6,7 @@ import {
   ContentServiceError,
 } from "../src/services/contentService";
 import type { FieldInput } from "../src/types";
+import { MAX_LIMIT } from "../src/types";
 
 function setup() {
   const db = openDatabase();
@@ -633,6 +634,206 @@ describe("ContentService", () => {
       expect(byId.get(car1.id)).toBe(0);
       expect(byId.get(car2.id)).toBe(0);
       expect(contentService.listForSchema("person")[0].referencer_count).toBe(1);
+    });
+  });
+
+  describe("pagination", () => {
+    function makeCarEntries(
+      schemaService: SchemaService,
+      contentService: ContentService,
+      count: number
+    ) {
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+      const ids: number[] = [];
+      for (let i = 0; i < count; i++) {
+        const e = contentService.create(
+          "car",
+          { "1": `Car ${i}` },
+          "editor1"
+        );
+        ids.push(e.id);
+      }
+      return ids;
+    }
+
+    it("returns entries in ascending id order by default", () => {
+      const { schemaService, contentService } = setup();
+      const ids = makeCarEntries(schemaService, contentService, 5);
+
+      const result = contentService.listForSchema("car", {});
+      expect(result.pagination.nextCursor).toBeNull();
+      expect(result.pagination.prevCursor).toBeNull();
+      expect(result.entries.map((e) => e.id)).toEqual(ids);
+    });
+
+    it("limit clamps: 0 → 1, 999 → MAX_LIMIT, negative → 1", () => {
+      const { schemaService, contentService } = setup();
+      makeCarEntries(schemaService, contentService, 10);
+
+      expect(contentService.listForSchema("car", { limit: 0 }).entries).toHaveLength(1);
+      expect(contentService.listForSchema("car", { limit: -5 }).entries).toHaveLength(1);
+      // Only 10 entries exist; limit=999 clamps to MAX_LIMIT but only 10 are returned
+      expect(
+        contentService.listForSchema("car", { limit: 999 }).entries
+      ).toHaveLength(10);
+    });
+
+    it("forward pagination: nextCursor set when more entries exist", () => {
+      const { schemaService, contentService } = setup();
+      const ids = makeCarEntries(schemaService, contentService, 5);
+
+      const page1 = contentService.listForSchema("car", { limit: 2 });
+      expect(page1.entries.map((e) => e.id)).toEqual(ids.slice(0, 2));
+      expect(page1.pagination.nextCursor).toBe(ids[1]);
+      expect(page1.pagination.prevCursor).toBeNull();
+    });
+
+    it("forward pagination: second page via cursor", () => {
+      const { schemaService, contentService } = setup();
+      const ids = makeCarEntries(schemaService, contentService, 5);
+
+      const page1 = contentService.listForSchema("car", { limit: 2 });
+      const page2 = contentService.listForSchema("car", {
+        limit: 2,
+        cursor: page1.pagination.nextCursor!,
+      });
+      expect(page2.entries.map((e) => e.id)).toEqual(ids.slice(2, 4));
+      expect(page2.pagination.nextCursor).toBe(ids[3]);
+      expect(page2.pagination.prevCursor).toBe(ids[2]);
+    });
+
+    it("forward pagination: last page has nextCursor null", () => {
+      const { schemaService, contentService } = setup();
+      const ids = makeCarEntries(schemaService, contentService, 5);
+
+      const page1 = contentService.listForSchema("car", { limit: 2 });
+      const page2 = contentService.listForSchema("car", {
+        limit: 2,
+        cursor: page1.pagination.nextCursor!,
+      });
+      const page3 = contentService.listForSchema("car", {
+        limit: 2,
+        cursor: page2.pagination.nextCursor!,
+      });
+      expect(page3.entries.map((e) => e.id)).toEqual(ids.slice(4));
+      expect(page3.pagination.nextCursor).toBeNull();
+      expect(page3.pagination.prevCursor).toBe(ids[4]);
+    });
+
+    it("backward pagination via direction=backward", () => {
+      const { schemaService, contentService } = setup();
+      const ids = makeCarEntries(schemaService, contentService, 5);
+
+      // Start from a cursor beyond the first page
+      const page1 = contentService.listForSchema("car", { limit: 2 });
+      const page2 = contentService.listForSchema("car", {
+        limit: 2,
+        cursor: page1.pagination.nextCursor!,
+      });
+
+      // Go backward from page2's first entry
+      const back = contentService.listForSchema("car", {
+        limit: 2,
+        cursor: page2.entries[0].id,
+        direction: "backward",
+      });
+      expect(back.entries.map((e) => e.id)).toEqual(ids.slice(0, 2));
+      expect(back.pagination.prevCursor).toBeNull();
+      expect(back.pagination.nextCursor).toBe(ids[1]);
+    });
+
+    it("exact multiple of limit: last page has nextCursor null", () => {
+      const { schemaService, contentService } = setup();
+      const ids = makeCarEntries(schemaService, contentService, 4);
+
+      const page1 = contentService.listForSchema("car", { limit: 2 });
+      expect(page1.pagination.nextCursor).toBe(ids[1]);
+
+      const page2 = contentService.listForSchema("car", {
+        limit: 2,
+        cursor: page1.pagination.nextCursor!,
+      });
+      expect(page2.entries.map((e) => e.id)).toEqual(ids.slice(2));
+      expect(page2.pagination.nextCursor).toBeNull();
+    });
+
+    it("single entry: both cursors null", () => {
+      const { schemaService, contentService } = setup();
+      makeCarEntries(schemaService, contentService, 1);
+
+      const result = contentService.listForSchema("car", { limit: 10 });
+      expect(result.entries).toHaveLength(1);
+      expect(result.pagination.nextCursor).toBeNull();
+      expect(result.pagination.prevCursor).toBeNull();
+    });
+
+    it("empty schema returns empty entries with null cursors", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      const result = contentService.listForSchema("car", { limit: 10 });
+      expect(result.entries).toEqual([]);
+      expect(result.pagination).toEqual({ nextCursor: null, prevCursor: null });
+    });
+
+    it("invalid cursor (non-numeric) treated as no cursor", () => {
+      const { schemaService, contentService } = setup();
+      const ids = makeCarEntries(schemaService, contentService, 3);
+
+      // parseCursor returns null for NaN → treated as first page
+      const result = contentService.listForSchema("car", {
+        limit: 2,
+        cursor: NaN,
+      });
+      expect(result.entries.map((e) => e.id)).toEqual(ids.slice(0, 2));
+      expect(result.pagination.prevCursor).toBeNull();
+    });
+
+    it("cursor beyond data returns empty entries with null cursors", () => {
+      const { schemaService, contentService } = setup();
+      makeCarEntries(schemaService, contentService, 3);
+
+      const result = contentService.listForSchema("car", {
+        limit: 10,
+        cursor: 9999,
+      });
+      expect(result.entries).toEqual([]);
+      expect(result.pagination).toEqual({ nextCursor: null, prevCursor: null });
+    });
+
+    it("listPublic pagination returns only compat entries", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      const e1 = contentService.create("car", { "1": "A" }, "editor1");
+      const e2 = contentService.create("car", { "1": "B" }, "editor1");
+
+      // Make e2 conflicted by bumping compat_version
+      schemaService.update(
+        "car",
+        [
+          { id: 1, label: "make", type: "text", required: true },
+          { label: "vin", type: "text", required: true },
+        ],
+        "editor1"
+      );
+      contentService.update(e1.id, { "2": "VIN" }, "editor1");
+
+      // listForSchema returns both
+      const editorResult = contentService.listForSchema("car", { limit: 10 });
+      expect(editorResult.entries).toHaveLength(2);
+
+      // listPublic returns only the resolved entry
+      const publicResult = contentService.listPublic("car", { limit: 10 });
+      expect(publicResult.entries).toHaveLength(1);
+      expect(publicResult.entries[0].id).toBe(e1.id);
+      expect(publicResult.pagination.nextCursor).toBeNull();
     });
   });
 });

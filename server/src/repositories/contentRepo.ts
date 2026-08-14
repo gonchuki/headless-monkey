@@ -1,4 +1,6 @@
 import type { Db } from "../db/database";
+import type { PaginationParams, PaginationResponse } from "../types";
+import { clampLimit, parseCursor } from "../types";
 
 export interface ContentRecord {
   id: number;
@@ -202,6 +204,114 @@ export class ContentRepository {
       rows: rowsByContentId.get(record.id) ?? [],
       refs: refsByContentId.get(record.id) ?? [],
     }));
+  }
+
+  /**
+   * Cursor-based paginated variant of {@link listEntries}.
+   * Fetches `limit + 1` rows to detect whether more data exists.
+   * The extra row is removed before returning.
+   */
+  listEntriesPaginated(
+    schema: string,
+    pagination: PaginationParams
+  ): { entries: ContentEntryRow[]; pagination: PaginationResponse } {
+    const limit = clampLimit(pagination.limit);
+    const cursor = parseCursor(pagination.cursor);
+    const direction = pagination.direction === "backward" ? "backward" : "forward";
+
+    const SELECT =
+      "SELECT id, schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by, " +
+      "(SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count " +
+      "FROM content";
+
+    let records: ContentRecord[];
+
+    if (cursor !== null && direction === "backward") {
+      records = this.db
+        .prepare(`${SELECT} WHERE schema = ? AND id < ? ORDER BY id DESC LIMIT ?`)
+        .all(schema, cursor, limit + 1) as ContentRecord[];
+      records.reverse(); // restore ASC order
+    } else if (cursor !== null && direction === "forward") {
+      records = this.db
+        .prepare(`${SELECT} WHERE schema = ? AND id > ? ORDER BY id ASC LIMIT ?`)
+        .all(schema, cursor, limit + 1) as ContentRecord[];
+    } else {
+      records = this.db
+        .prepare(`${SELECT} WHERE schema = ? ORDER BY id ASC LIMIT ?`)
+        .all(schema, limit + 1) as ContentRecord[];
+    }
+
+    const hasMore = records.length > limit;
+    if (hasMore) records.pop(); // remove the extra probe row
+
+    if (records.length === 0) {
+      return { entries: [], pagination: { nextCursor: null, prevCursor: null } };
+    }
+
+    // Batch-fetch rows and refs for the paginated record set.
+    const ids = records.map((r) => r.id);
+    const placeholders = ids.map(() => "?").join(",");
+
+    const allRows = this.db
+      .prepare(
+        `SELECT content_id, field_id, value FROM content_rows WHERE content_id IN (${placeholders}) ORDER BY content_id, field_id`
+      )
+      .all(...ids) as (ContentRow & { content_id: number })[];
+
+    const allRefs = this.db
+      .prepare(
+        `SELECT content_id, field_id, target_content_id FROM content_refs WHERE content_id IN (${placeholders}) ORDER BY content_id, field_id`
+      )
+      .all(...ids) as (ContentRef & { content_id: number })[];
+
+    const rowsByContentId = new Map<number, ContentRow[]>();
+    for (const row of allRows) {
+      const { content_id, ...rest } = row;
+      if (!rowsByContentId.has(content_id)) rowsByContentId.set(content_id, []);
+      rowsByContentId.get(content_id)!.push(rest);
+    }
+
+    const refsByContentId = new Map<number, ContentRef[]>();
+    for (const ref of allRefs) {
+      const { content_id, ...rest } = ref;
+      if (!refsByContentId.has(content_id)) refsByContentId.set(content_id, []);
+      refsByContentId.get(content_id)!.push(rest);
+    }
+
+    const entries = records.map((record) => ({
+      record,
+      rows: rowsByContentId.get(record.id) ?? [],
+      refs: refsByContentId.get(record.id) ?? [],
+    }));
+
+    const paginationResult: PaginationResponse = {
+      nextCursor:
+        hasMore
+          ? records[records.length - 1].id
+          : direction === "backward" && records.length > 0
+            ? // For backward pages, check if there are entries after the last one
+              this.db
+                .prepare(
+                  "SELECT 1 FROM content WHERE schema = ? AND id > ? LIMIT 1"
+                )
+                .get(schema, records[records.length - 1].id) !== undefined
+              ? records[records.length - 1].id
+              : null
+            : null,
+      prevCursor:
+        cursor !== null && records.length > 0
+          ? // Check if there's at least one entry before the first on this page
+            this.db
+              .prepare(
+                "SELECT 1 FROM content WHERE schema = ? AND id < ? LIMIT 1"
+              )
+              .get(schema, records[0].id) !== undefined
+            ? records[0].id
+            : null
+          : null,
+    };
+
+    return { entries, pagination: paginationResult };
   }
 
   entryExistsInSchema(id: number, schema: string): boolean {

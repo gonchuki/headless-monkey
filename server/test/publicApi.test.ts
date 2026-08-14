@@ -400,4 +400,181 @@ describe("Public content API (R18-R20)", () => {
       expect(ok.status).toBe(204);
     });
   });
+
+  describe("pagination", () => {
+    it("editor: GET /api/schemas/car/entries?limit=2 returns paginated response", async () => {
+      const { app, schemaService } = createTestApp();
+      makeCarSchema(schemaService);
+      const token = editorToken();
+      const makeField = { id: 1, label: "make" }; // car schema field ids start at 1
+
+      // Create 5 entries
+      for (let i = 0; i < 5; i++) {
+        await request(app)
+          .post("/api/schemas/car/entries")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ values: { "1": `Car ${i}` } });
+      }
+
+      const page1 = await request(app)
+        .get("/api/schemas/car/entries?limit=2")
+        .set("Authorization", `Bearer ${token}`);
+      expect(page1.status).toBe(200);
+      expect(page1.body.entries).toHaveLength(2);
+      expect(page1.body.pagination.nextCursor).toBeDefined();
+      expect(page1.body.pagination.prevCursor).toBeNull();
+
+      const page2 = await request(app)
+        .get(`/api/schemas/car/entries?limit=2&cursor=${page1.body.pagination.nextCursor}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(page2.status).toBe(200);
+      expect(page2.body.entries).toHaveLength(2);
+      expect(page2.body.pagination.nextCursor).toBeDefined();
+      expect(page2.body.pagination.prevCursor).toBeDefined();
+
+      const page3 = await request(app)
+        .get(`/api/schemas/car/entries?limit=2&cursor=${page2.body.pagination.nextCursor}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(page3.status).toBe(200);
+      expect(page3.body.entries).toHaveLength(1);
+      expect(page3.body.pagination.nextCursor).toBeNull();
+    });
+
+    it("public: GET /api/content/car?limit=2 returns paginated response with schema envelope", async () => {
+      const { app, schemaService } = createTestApp();
+      makeCarSchema(schemaService);
+      const token = editorToken();
+
+      for (let i = 0; i < 5; i++) {
+        await request(app)
+          .post("/api/schemas/car/entries")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ values: { "1": `Car ${i}` } });
+      }
+
+      const page1 = await request(app).get("/api/content/car?limit=2");
+      expect(page1.status).toBe(200);
+      expect(page1.body.schema).toBeDefined();
+      expect(page1.body.entries).toHaveLength(2);
+      expect(page1.body.pagination.nextCursor).toBeDefined();
+      expect(page1.body.pagination.prevCursor).toBeNull();
+
+      const page2 = await request(app).get(
+        `/api/content/car?limit=2&cursor=${page1.body.pagination.nextCursor}`
+      );
+      expect(page2.status).toBe(200);
+      expect(page2.body.entries).toHaveLength(2);
+
+      const page3 = await request(app).get(
+        `/api/content/car?limit=2&cursor=${page2.body.pagination.nextCursor}`
+      );
+      expect(page3.status).toBe(200);
+      expect(page3.body.entries).toHaveLength(1);
+      expect(page3.body.pagination.nextCursor).toBeNull();
+    });
+
+    it("public: no pagination params returns all entries with null cursors", async () => {
+      const { app, schemaService } = createTestApp();
+      makeCarSchema(schemaService);
+      const token = editorToken();
+
+      for (let i = 0; i < 3; i++) {
+        await request(app)
+          .post("/api/schemas/car/entries")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ values: { "1": `Car ${i}` } });
+      }
+
+      const res = await request(app).get("/api/content/car");
+      expect(res.status).toBe(200);
+      expect(res.body.entries).toHaveLength(3);
+      expect(res.body.pagination).toEqual({ nextCursor: null, prevCursor: null });
+    });
+
+    it("limit clamping: ?limit=0 returns 1 entry, ?limit=999 returns at most 200", async () => {
+      const { app, schemaService } = createTestApp();
+      makeCarSchema(schemaService);
+      const token = editorToken();
+
+      for (let i = 0; i < 5; i++) {
+        await request(app)
+          .post("/api/schemas/car/entries")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ values: { "1": `Car ${i}` } });
+      }
+
+      const limit0 = await request(app)
+        .get("/api/schemas/car/entries?limit=0")
+        .set("Authorization", `Bearer ${token}`);
+      expect(limit0.body.entries).toHaveLength(1);
+
+      const limitBig = await request(app)
+        .get("/api/schemas/car/entries?limit=999")
+        .set("Authorization", `Bearer ${token}`);
+      expect(limitBig.body.entries).toHaveLength(5); // only 5 entries exist
+    });
+
+    it("invalid cursor (non-numeric) returns first page", async () => {
+      const { app, schemaService } = createTestApp();
+      makeCarSchema(schemaService);
+      const token = editorToken();
+
+      for (let i = 0; i < 3; i++) {
+        await request(app)
+          .post("/api/schemas/car/entries")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ values: { "1": `Car ${i}` } });
+      }
+
+      const res = await request(app)
+        .get("/api/schemas/car/entries?cursor=abc")
+        .set("Authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.entries).toHaveLength(3);
+      expect(res.body.pagination.prevCursor).toBeNull();
+    });
+
+    it("backward navigation via direction=backward", async () => {
+      const { app, schemaService } = createTestApp();
+      makeCarSchema(schemaService);
+      const token = editorToken();
+
+      for (let i = 0; i < 5; i++) {
+        await request(app)
+          .post("/api/schemas/car/entries")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ values: { "1": `Car ${i}` } });
+      }
+
+      // Get first page
+      const page1 = await request(app)
+        .get("/api/schemas/car/entries?limit=2")
+        .set("Authorization", `Bearer ${token}`);
+
+      // Get second page
+      const page2 = await request(app)
+        .get(`/api/schemas/car/entries?limit=2&cursor=${page1.body.pagination.nextCursor}`)
+        .set("Authorization", `Bearer ${token}`);
+
+      // Navigate backward from page2's first entry
+      const back = await request(app)
+        .get(
+          `/api/schemas/car/entries?limit=2&cursor=${page2.body.entries[0].id}&direction=backward`
+        )
+        .set("Authorization", `Bearer ${token}`);
+      expect(back.status).toBe(200);
+      expect(back.body.entries).toHaveLength(2);
+      expect(back.body.pagination.prevCursor).toBeNull();
+    });
+
+    it("empty schema returns { entries: [], pagination: { nextCursor: null, prevCursor: null } }", async () => {
+      const { app, schemaService } = createTestApp();
+      makeCarSchema(schemaService);
+
+      const res = await request(app).get("/api/content/car?limit=10");
+      expect(res.status).toBe(200);
+      expect(res.body.entries).toEqual([]);
+      expect(res.body.pagination).toEqual({ nextCursor: null, prevCursor: null });
+    });
+  });
 });
