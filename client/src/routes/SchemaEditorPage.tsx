@@ -313,7 +313,7 @@ export default function SchemaEditorPage() {
     );
   }
 
-  const canSave =
+  const saveDisabled =
     activeFields.length === 0 ||
     (isCreate && state.name.trim() === "") ||
     activeFields.some((field) => field.label.trim() === "") ||
@@ -338,7 +338,7 @@ export default function SchemaEditorPage() {
             )}
           </div>
         </div>
-        <Button type="button" disabled={canSave} onClick={handleSave}>
+        <Button type="button" disabled={saveDisabled} onClick={handleSave}>
           {isCreate ? "Create schema" : "Save changes"}
         </Button>
       </div>
