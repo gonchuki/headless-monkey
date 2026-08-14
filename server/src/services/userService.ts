@@ -45,21 +45,14 @@ export class UserService {
     if (input.password) {
       hashedPassword = await this.hashPassword(input.password);
     }
-    if (hashedPassword !== undefined) {
-      const found = this.repo.updatePasswordIfFound(id, hashedPassword);
-      if (!found) {
-        const err = new Error("User not found") as Error & { statusCode?: number };
-        err.statusCode = 404;
-        throw err;
-      }
-    }
-    if (input.disabled !== undefined) {
-      const found = this.repo.updateDisabledIfFound(id, input.disabled);
-      if (!found) {
-        const err = new Error("User not found") as Error & { statusCode?: number };
-        err.statusCode = 404;
-        throw err;
-      }
+    const found = this.repo.updateIfFound(id, {
+      hashedPassword,
+      disabled: input.disabled,
+    });
+    if (!found) {
+      const err = new Error("User not found") as Error & { statusCode?: number };
+      err.statusCode = 404;
+      throw err;
     }
   }
 
