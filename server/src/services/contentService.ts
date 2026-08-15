@@ -170,7 +170,7 @@ export class ContentService {
     const schema = this.requireSchema(schemaName);
 
     // Determine if first arg is pagination or sort.
-    // SortParams requires sortField (a number or 'id' or 'date');
+    // SortParams requires sortField (a number, 'id', 'date', or 'modified');
     // PaginationParams has only optional fields (limit, cursor, direction).
     // When the first arg has sortField, it's a sort; otherwise treat as pagination.
     let pagination: PaginationParams | undefined;
@@ -275,7 +275,7 @@ export class ContentService {
   private resolveSort(schema: SchemaEntry, sort: SortParams): ResolvedSortParams {
     const sortOrder = sort.sortOrder ?? "asc";
 
-    if (sort.sortField === "id" || sort.sortField === "date") {
+    if (sort.sortField === "id" || sort.sortField === "date" || sort.sortField === "modified") {
       return { sortField: sort.sortField, sortOrder };
     }
 

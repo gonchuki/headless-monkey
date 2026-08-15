@@ -93,7 +93,7 @@ export default function ContentPage() {
   // Sort state from URL
   const sortFieldRaw = searchParams.get("sort_field");
   const sortOrderRaw = searchParams.get("sort_order");
-  const sortField = sortFieldRaw ?? "id";
+  const sortField = sortFieldRaw ?? "modified";
   const sortOrder: "asc" | "desc" = sortOrderRaw === "asc" ? "asc" : "desc";
   const sort: SortParams = { sortField, sortOrder };
 
@@ -335,12 +335,11 @@ export default function ContentPage() {
                 const params = new URLSearchParams();
                 if (conflictedOnly) params.set("conflicted", "1");
                 // Preset options encode both field and order
-                if (newValue === "newest") {
-                  params.set("sort_field", "id");
-                  params.set("sort_order", "desc");
-                } else if (newValue === "oldest") {
-                  params.set("sort_field", "id");
-                  params.set("sort_order", "asc");
+                if (newValue === "modified") {
+                  // Direction is controlled by the adjacent toggle, so preserve
+                  // the current sort order from the URL.
+                  params.set("sort_field", "modified");
+                  params.set("sort_order", sortOrder);
                 } else if (newValue === "date") {
                   params.set("sort_field", "date");
                   params.set("sort_order", "asc");
@@ -357,24 +356,25 @@ export default function ContentPage() {
                 const newOrder = sortOrder === "asc" ? "desc" : "asc";
                 const params = new URLSearchParams();
                 if (conflictedOnly) params.set("conflicted", "1");
-                params.set("sort_field", sortField);
+                // Normalize the legacy "id" token to "modified" on rewrite.
+                params.set("sort_field", sortField === "id" ? "modified" : sortField);
                 params.set("sort_order", newOrder);
                 const qs = params.toString();
                 navigate(`/content/${encodeURIComponent(selectedSchemaName)}?${qs}`);
               }
 
-              // Derive select value from current URL sort state
-              const selectValue = sortField === "id" && sortOrder === "desc"
-                ? "newest"
-                : sortField === "id" && sortOrder === "asc"
-                  ? "oldest"
+              // Derive select value from current URL sort state. Both the
+              // "modified" token and the legacy "id" token map to the
+              // "Modified date" option.
+              const selectValue =
+                sortField === "modified" || sortField === "id"
+                  ? "modified"
                   : sortField === "date"
                     ? "date"
                     : sortField;
 
               const sortLabel =
-                selectValue === "newest" ? "Newest first"
-                : selectValue === "oldest" ? "Oldest first"
+                selectValue === "modified" ? "Modified date"
                 : selectValue === "date" ? "Creation date"
                 : sortableFields.find((f) => String(f.id) === selectValue)
                   ? `${sortableFields.find((f) => String(f.id) === selectValue)!.label} (${sortableFields.find((f) => String(f.id) === selectValue)!.type})`
@@ -389,8 +389,7 @@ export default function ContentPage() {
                         <SelectValue>{sortLabel}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="newest">Newest first</SelectItem>
-                        <SelectItem value="oldest">Oldest first</SelectItem>
+                        <SelectItem value="modified">Modified date</SelectItem>
                         <SelectItem value="date">Creation date</SelectItem>
                         {sortableFields.map((field) => (
                           <SelectItem key={field.id} value={String(field.id)}>

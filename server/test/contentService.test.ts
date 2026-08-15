@@ -830,12 +830,15 @@ describe("ContentService", () => {
       const { schemaService, contentService } = setup();
       makeCarEntries(schemaService, contentService, 3);
 
-      // Default sort is DESC. Legacy bare-id cursor "1" means "forward from
-      // anchor (1, 1)" which in DESC mode is "entries with id < 1" → empty.
-      const result = contentService.listForSchema("car", {
-        limit: 10,
-        cursor: "1",
-      });
+      // Explicit id sort (the default is now modified desc, for which legacy
+      // bare-id cursors are invalid and fall back to the first page). Legacy
+      // bare-id cursor "1" means "forward from anchor (1, 1)" which in DESC
+      // mode is "entries with id < 1" → empty.
+      const result = contentService.listForSchema(
+        "car",
+        { limit: 10, cursor: "1" },
+        { sortField: "id", sortOrder: "desc" }
+      );
       expect(result.entries).toEqual([]);
       expect(result.pagination).toEqual({ nextCursor: null, prevCursor: null });
     });
@@ -920,6 +923,34 @@ describe("ContentService", () => {
 
       const result = contentService.listForSchema("car", { sortField: "id", sortOrder: "desc" });
       expect(result.map((e) => e.id)).toEqual([e3.id, e2.id, e1.id]);
+    });
+
+    it("sort by modified orders by last_modified_date, not row id (PLAN-60)", () => {
+      const { schemaService, contentService, db } = setup();
+      const car = makeSortSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      // e1 is created first (lower id) but modified after e2.
+      const e1 = contentService.create("car", { [String(makeField.id)]: "Civic" }, "editor1");
+      const e2 = contentService.create("car", { [String(makeField.id)]: "Accord" }, "editor1");
+
+      // Set the timestamps explicitly: wall-clock creation could land both
+      // entries in the same millisecond, which would let the id tiebreak — not
+      // modification time — decide the order.
+      const setModified = db.prepare(
+        "UPDATE content SET last_modified_date = ? WHERE id = ?"
+      );
+      setModified.run("2026-01-02T00:00:00.000Z", e1.id);
+      setModified.run("2026-01-01T00:00:00.000Z", e2.id);
+
+      // Desc: the earlier-created entry (e1) was modified later, so it comes
+      // first despite its lower id. This fails against ORDER BY content.id.
+      const desc = contentService.listForSchema("car", { sortField: "modified", sortOrder: "desc" });
+      expect(desc.map((e) => e.id)).toEqual([e1.id, e2.id]);
+
+      // Asc is the reverse.
+      const asc = contentService.listForSchema("car", { sortField: "modified", sortOrder: "asc" });
+      expect(asc.map((e) => e.id)).toEqual([e2.id, e1.id]);
     });
 
     it("sort by text field returns entries in alphabetical order", () => {
@@ -1084,7 +1115,7 @@ describe("ContentService", () => {
     /** Walk forward from page 1 with a small limit; returns every page. */
     function walkForward(
       contentService: ContentService,
-      sort: { sortField: number; sortOrder: "asc" | "desc" },
+      sort: { sortField: number | "id" | "date" | "modified"; sortOrder: "asc" | "desc" },
       limit: number
     ) {
       const pages: { ids: number[]; pagination: { nextCursor: string | null; prevCursor: string | null } }[] = [];
@@ -1221,6 +1252,45 @@ describe("ContentService", () => {
       );
       expect(back.entries.map((e) => e.id)).toEqual(pages[0].ids);
       expect(back.pagination.prevCursor).toBeNull();
+    });
+
+    it("modified desc: walk visits every entry exactly once in display order (PLAN-60)", () => {
+      const { schemaService, contentService, db } = setup();
+      const car = makeWalkSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      const ids: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        const e = contentService.create("car", { [String(makeField.id)]: `Car ${i}` }, "editor1");
+        ids.push(e.id);
+      }
+
+      // Explicit timestamps, deliberately reversed against id order: the
+      // earliest-created entry (ids[0]) is the most recently modified.
+      const stamps = [
+        "2026-01-05T00:00:00.000Z",
+        "2026-01-04T00:00:00.000Z",
+        "2026-01-03T00:00:00.000Z",
+        "2026-01-02T00:00:00.000Z",
+        "2026-01-01T00:00:00.000Z",
+      ];
+      const setModified = db.prepare(
+        "UPDATE content SET last_modified_date = ? WHERE id = ?"
+      );
+      ids.forEach((id, i) => setModified.run(stamps[i], id));
+
+      // Display order (modified desc): ids[0] > ids[1] > ids[2] > ids[3] > ids[4].
+      const pages = walkForward(contentService, { sortField: "modified", sortOrder: "desc" }, 2);
+      expect(pages.map((p) => p.ids)).toEqual([[ids[0], ids[1]], [ids[2], ids[3]], [ids[4]]]);
+
+      // Every row appears exactly once across the pages.
+      const all = pages.flatMap((p) => p.ids);
+      expect(all).toHaveLength(ids.length);
+      expect(new Set(all)).toEqual(new Set(ids));
+
+      expect(pages[0].pagination.prevCursor).toBeNull();
+      expect(pages[0].pagination.nextCursor).not.toBeNull();
+      expect(pages[pages.length - 1].pagination.nextCursor).toBeNull();
     });
 
     it("text field asc: backward from a NULL-valued anchor returns the preceding rows", () => {

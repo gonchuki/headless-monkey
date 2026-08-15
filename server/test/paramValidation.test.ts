@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import jwt from "jsonwebtoken";
+import type { Request } from "express";
 import { createApp } from "../src/app";
 import { openDatabase } from "../src/db/database";
 import { SchemaService } from "../src/services/schemaService";
+import { parseSortParams, ParamValidationError } from "../src/routes/paramValidation";
 
 function createTestApp() {
   const db = openDatabase();
@@ -128,5 +130,34 @@ describe("Numeric param validation (PLAN-45)", () => {
       // Entry 1 doesn't exist, so it should be 404 (not found), not 422 (validation error)
       expect(res.status).toBe(404);
     });
+  });
+});
+
+describe("parseSortParams (PLAN-60)", () => {
+  function reqWith(query: Record<string, string>): Request {
+    return { query } as unknown as Request;
+  }
+
+  it("accepts sort_field=modified", () => {
+    expect(parseSortParams(reqWith({ sort_field: "modified" }))).toEqual({
+      sortField: "modified",
+    });
+  });
+
+  it("still accepts the legacy 'id'/'date' literals and numeric field ids", () => {
+    expect(parseSortParams(reqWith({ sort_field: "id" }))).toEqual({ sortField: "id" });
+    expect(parseSortParams(reqWith({ sort_field: "date" }))).toEqual({ sortField: "date" });
+    expect(parseSortParams(reqWith({ sort_field: "7" }))).toEqual({ sortField: 7 });
+  });
+
+  it("rejects an unknown literal with 422", () => {
+    let caught: unknown;
+    try {
+      parseSortParams(reqWith({ sort_field: "bogus" }));
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ParamValidationError);
+    expect((caught as ParamValidationError).statusCode).toBe(422);
   });
 });
