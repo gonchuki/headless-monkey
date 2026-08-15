@@ -1,5 +1,6 @@
 import { useQueries } from "@tanstack/react-query";
 import { apiFetch, type ContentListEntry, type PaginationResponse } from "@/lib/api";
+import { compareRawCursors } from "@/lib/cursor";
 import { queryKeys } from "@/lib/query";
 import type { PaginationParams, SortParams, PaginatedEntries } from "@/hooks/useEntries";
 
@@ -56,19 +57,25 @@ export function useAllEntries(schemaNames: string[], pagination?: PaginationPara
     })
     .sort((a, b) => (a.last_modified_date < b.last_modified_date ? 1 : a.last_modified_date > b.last_modified_date ? -1 : 0));
 
-  // Merge pagination from all queries: nextCursor is the smallest non-null,
-  // prevCursor is the largest non-null (any schema having more = "has more").
+  // Merge pagination from all queries: nextCursor is the cursor whose decoded
+  // anchor (sort value, id) is the minimum under natural ascending comparison,
+  // prevCursor the maximum (any schema having more = "has more"). For today's
+  // id-based cursors this reduces to the previous Math.min/Math.max on ids.
   const mergedPagination: PaginationResponse = pagination
     ? {
-        nextCursor: queries.reduce<number | null>((acc, q) => {
+        nextCursor: queries.reduce<string | null>((acc, q) => {
           const p = (q.data as PaginatedEntries | undefined)?.pagination;
           if (p?.nextCursor == null) return null;
-          return acc == null ? p.nextCursor : Math.min(acc, p.nextCursor);
+          if (acc == null) return p.nextCursor;
+          const cmp = compareRawCursors(p.nextCursor, acc);
+          return cmp !== null && cmp <= 0 ? p.nextCursor : acc;
         }, null),
-        prevCursor: queries.reduce<number | null>((acc, q) => {
+        prevCursor: queries.reduce<string | null>((acc, q) => {
           const p = (q.data as PaginatedEntries | undefined)?.pagination;
           if (p?.prevCursor == null) return null;
-          return acc == null ? p.prevCursor : Math.max(acc, p.prevCursor);
+          if (acc == null) return p.prevCursor;
+          const cmp = compareRawCursors(p.prevCursor, acc);
+          return cmp !== null && cmp >= 0 ? p.prevCursor : acc;
         }, null),
       }
     : { nextCursor: null, prevCursor: null };

@@ -576,5 +576,50 @@ describe("Public content API (R18-R20)", () => {
       expect(res.body.entries).toEqual([]);
       expect(res.body.pagination).toEqual({ nextCursor: null, prevCursor: null });
     });
+
+    it("field sort: opaque cursors round-trip through URLs across pages", async () => {
+      const { app, schemaService } = createTestApp();
+      const car = makeCarSchema(schemaService);
+      const token = editorToken();
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
+      // Seed so sort order disagrees with id order (Civic has the smallest id).
+      for (const make of ["Civic", "Accord", "BMW"]) {
+        await request(app)
+          .post("/api/schemas/car/entries")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ values: { [String(makeField.id)]: make } });
+      }
+
+      const page1 = await request(app)
+        .get(`/api/schemas/car/entries?limit=2&sort_field=${makeField.id}&sort_order=asc`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(page1.status).toBe(200);
+      expect(page1.body.entries).toHaveLength(2);
+      const next = page1.body.pagination.nextCursor;
+      expect(next).not.toBeNull();
+
+      // The keyset cursor carries the sort-column value, so page 2 contains
+      // the remaining row (Civic) that a bare-id cursor would have dropped.
+      const page2 = await request(app)
+        .get(
+          `/api/schemas/car/entries?limit=2&sort_field=${makeField.id}&sort_order=asc&cursor=${next}`
+        )
+        .set("Authorization", `Bearer ${token}`);
+      expect(page2.status).toBe(200);
+      expect(page2.body.entries).toHaveLength(1);
+      expect(page2.body.entries[0].values[String(makeField.id)]).toBe("Civic");
+      expect(page2.body.pagination.nextCursor).toBeNull();
+
+      // Backward from page 2's prevCursor returns to page 1.
+      const back = await request(app)
+        .get(
+          `/api/schemas/car/entries?limit=2&sort_field=${makeField.id}&sort_order=asc&cursor=${page2.body.pagination.prevCursor}&direction=backward`
+        )
+        .set("Authorization", `Bearer ${token}`);
+      expect(back.status).toBe(200);
+      expect(back.body.entries).toHaveLength(2);
+      expect(back.body.pagination.prevCursor).toBeNull();
+    });
   });
 });
