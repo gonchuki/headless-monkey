@@ -158,7 +158,7 @@ export class ContentRepository {
   }
 
   listEntries(schema: string, sort?: ResolvedSortParams): ContentEntryRow[] {
-    const resolvedSort = sort ?? { sortField: "id", sortOrder: "desc" };
+    const resolvedSort = sort ?? { sortField: "modified", sortOrder: "desc" };
     const orderClause = this.buildOrderClause(resolvedSort);
     const joinClause = this.buildJoinClause(resolvedSort);
 
@@ -225,7 +225,7 @@ export class ContentRepository {
     const limit = clampLimit(pagination.limit);
     const direction = pagination.direction === "backward" ? "backward" : "forward";
 
-    const resolvedSort = sort ?? { sortField: "id", sortOrder: "desc" };
+    const resolvedSort = sort ?? { sortField: "modified", sortOrder: "desc" };
     const joinClause = this.buildJoinClause(resolvedSort);
     const col = this.buildSortColumn(resolvedSort);
     const orderClause = this.buildOrderClause(resolvedSort);
@@ -362,6 +362,8 @@ export class ContentRepository {
         return { expr: "content.id", nullable: false };
       case "date":
         return { expr: "content.creation_date", nullable: false };
+      case "modified":
+        return { expr: "content.last_modified_date", nullable: false };
       default: {
         // Field id — value column is TEXT; numbers need CAST
         const valueExpr =
@@ -374,12 +376,12 @@ export class ContentRepository {
   }
 
   /**
-   * Tiebreak direction T for `content.id` in display order. Every current sort
-   * keeps the universal `id ASC` tiebreak; the "modified" sort (added by
-   * PLAN-60) will match the tiebreak to the sort direction — add its case here.
+   * Tiebreak direction T for `content.id` in display order. Every sort keeps
+   * the universal `id ASC` tiebreak except "modified", which matches the
+   * tiebreak to the sort direction (PLAN-60).
    */
   private tiebreakDirection(sort: ResolvedSortParams): "asc" | "desc" {
-    if ((sort.sortField as string) === "modified") return sort.sortOrder;
+    if (sort.sortField === "modified") return sort.sortOrder;
     return "asc";
   }
 
@@ -398,6 +400,11 @@ export class ContentRepository {
 
     if (sort.sortField === "id") {
       return `ORDER BY content.id ${reversed ? revDir : dir}`;
+    }
+    if (sort.sortField === "modified") {
+      // The id tiebreak follows the sort direction: under desc, same-timestamp
+      // entries render newest-created first.
+      return `ORDER BY content.last_modified_date ${reversed ? revDir : dir}, content.id ${reversed ? revDir : dir}`;
     }
     const nulls = reversed ? "NULLS FIRST" : "NULLS LAST";
     return `ORDER BY ${col.expr} ${reversed ? revDir : dir} ${nulls}, content.id ${idDir}`;
@@ -461,6 +468,7 @@ export class ContentRepository {
       case "id":
         return typeof cursor.value === "number";
       case "date":
+      case "modified":
         return typeof cursor.value === "string";
       default:
         return sort.sortFieldType === "number"
@@ -480,6 +488,8 @@ export class ContentRepository {
         return { value: id, id, legacy: false };
       case "date":
         return { value: record.creation_date, id, legacy: false };
+      case "modified":
+        return { value: record.last_modified_date, id, legacy: false };
       default: {
         const raw = record.sort_value ?? null;
         const value =

@@ -74,16 +74,16 @@ export function parseSortParams(req: Request): SortParams | undefined {
 
   if (!hasField && !hasOrder) return undefined;
 
-  const params: SortParams = { sortField: "id" };
+  const params: SortParams = { sortField: "modified" };
 
   if (hasField) {
     const raw = String(req.query.sort_field);
-    if (raw === "id" || raw === "date") {
+    if (raw === "id" || raw === "date" || raw === "modified") {
       params.sortField = raw;
     } else {
       const n = Number(raw);
       if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || String(n) !== raw.trim()) {
-        throw new ParamValidationError(422, "Invalid sort_field: must be 'id', 'date', or a positive integer");
+        throw new ParamValidationError(422, "Invalid sort_field: must be 'id', 'date', 'modified', or a positive integer");
       }
       params.sortField = n;
     }

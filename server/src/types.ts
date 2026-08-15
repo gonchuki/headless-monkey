@@ -150,14 +150,17 @@ export function parseCursor(raw?: string | null): DecodedCursor | null {
 // ── Sorting ──────────────────────────────────────────────────────────
 
 export interface SortParams {
-  /** Field id (number), 'id' for content.id, or 'date' for creation_date. */
-  sortField: number | "id" | "date";
+  /**
+   * Field id (number), 'id' → content.id, 'date' → creation_date,
+   * or 'modified' → last_modified_date.
+   */
+  sortField: number | "id" | "date" | "modified";
   sortOrder?: "asc" | "desc";
 }
 
 /** Resolved sort params after service-layer validation. Carries field type for SQL generation. */
 export interface ResolvedSortParams {
-  sortField: number | "id" | "date";
+  sortField: number | "id" | "date" | "modified";
   sortOrder: "asc" | "desc";
   /** When sortField is a number, this is the field's scalar type. */
   sortFieldType?: "text" | "number" | "date";
