@@ -103,11 +103,13 @@ export default function ContentPage() {
   const cursorPrev = searchParams.get("cursor_prev");
 
   const hasCursorState = cursorNext != null || cursorPrev != null;
+  // Cursors are opaque strings: carried from the URL to the query and back,
+  // unchanged.
   const paginationParams: PaginationParams | undefined = hasCursorState
     ? {
         limit: PAGE_LIMIT,
-        ...(cursorNext != null ? { cursor: Number(cursorNext), direction: "forward" as const } : {}),
-        ...(cursorPrev != null ? { cursor: Number(cursorPrev), direction: "backward" as const } : {}),
+        ...(cursorNext != null ? { cursor: cursorNext, direction: "forward" as const } : {}),
+        ...(cursorPrev != null ? { cursor: cursorPrev, direction: "backward" as const } : {}),
       }
     : undefined;
 

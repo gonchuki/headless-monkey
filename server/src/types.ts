@@ -76,13 +76,14 @@ export const MAX_LIMIT = 200;
 
 export interface PaginationParams {
   limit?: number;
-  cursor?: number;
+  /** Opaque cursor string (see {@link encodeCursor} / {@link parseCursor}). */
+  cursor?: string;
   direction?: "forward" | "backward";
 }
 
 export interface PaginationResponse {
-  nextCursor: number | null;
-  prevCursor: number | null;
+  nextCursor: string | null;
+  prevCursor: string | null;
 }
 
 /** Clamp a raw limit to [MIN_LIMIT, MAX_LIMIT]; undefined → DEFAULT_LIMIT. */
@@ -92,13 +93,58 @@ export function clampLimit(raw?: number): number {
 }
 
 /**
- * Parse a cursor value. Non-finite, zero, or negative → null (treated as
- * "no cursor" / first page).
+ * A decoded pagination cursor: the anchor row's sort-column value plus its
+ * `content.id` tiebreak. `value === null` means the anchor row has a SQL NULL
+ * sort value (custom-field sorts only); it is distinct from any string value.
  */
-export function parseCursor(raw?: number): number | null {
-  if (raw === undefined || raw === null || !Number.isFinite(raw) || raw < 1)
+export interface DecodedCursor {
+  value: number | string | null;
+  id: number;
+  /** True when decoded from a legacy bare-id cursor (valid for id sorts only). */
+  legacy: boolean;
+}
+
+/**
+ * Encode an opaque cursor from the anchor row's sort-column value and its
+ * `content.id`. The encoding is base64url of a small JSON pair, so it is safe
+ * to carry in a URL query param and reversible. JSON `null` distinguishes a
+ * SQL NULL sort value from any string value.
+ */
+export function encodeCursor(value: number | string | null, id: number): string {
+  return Buffer.from(JSON.stringify({ v: value, i: id }), "utf8").toString("base64url");
+}
+
+/**
+ * Decode an opaque cursor. Returns null (treated as "no cursor" / first page)
+ * for missing or undecodable input, preserving the lenient behavior for
+ * garbage input. A bare positive integer is accepted as a legacy id cursor
+ * (`value` and `id` both the integer); callers must treat legacy cursors as
+ * valid only for id sorts.
+ */
+export function parseCursor(raw?: string | null): DecodedCursor | null {
+  if (raw === undefined || raw === null) return null;
+  const s = String(raw).trim();
+  if (s === "") return null;
+
+  // Legacy bare-id cursor from pre-keyset clients.
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isSafeInteger(n) || n < 1) return null;
+    return { value: n, id: n, legacy: true };
+  }
+
+  // Opaque cursor: base64url of JSON { v, i }.
+  try {
+    const json = Buffer.from(s, "base64url").toString("utf8");
+    const obj: unknown = JSON.parse(json);
+    if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return null;
+    const { v, i } = obj as { v?: unknown; i?: unknown };
+    if (v !== null && typeof v !== "string" && typeof v !== "number") return null;
+    if (typeof i !== "number" || !Number.isSafeInteger(i) || i < 1) return null;
+    return { value: v, id: i, legacy: false };
+  } catch {
     return null;
-  return Math.floor(raw);
+  }
 }
 
 // ── Sorting ──────────────────────────────────────────────────────────

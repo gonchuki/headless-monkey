@@ -687,7 +687,7 @@ describe("ContentService", () => {
       // Default sort is DESC, so first page has highest ids
       const page1 = contentService.listForSchema("car", { limit: 2 });
       expect(page1.entries.map((e) => e.id)).toEqual([ids[4], ids[3]]);
-      expect(page1.pagination.nextCursor).toBe(ids[3]);
+      expect(page1.pagination.nextCursor).not.toBeNull();
       expect(page1.pagination.prevCursor).toBeNull();
     });
 
@@ -702,8 +702,8 @@ describe("ContentService", () => {
         cursor: page1.pagination.nextCursor!,
       });
       expect(page2.entries.map((e) => e.id)).toEqual([ids[2], ids[1]]);
-      expect(page2.pagination.nextCursor).toBe(ids[1]);
-      expect(page2.pagination.prevCursor).toBe(ids[2]);
+      expect(page2.pagination.nextCursor).not.toBeNull();
+      expect(page2.pagination.prevCursor).not.toBeNull();
     });
 
     it("forward pagination: last page has nextCursor null", () => {
@@ -722,7 +722,7 @@ describe("ContentService", () => {
       });
       expect(page3.entries.map((e) => e.id)).toEqual([ids[0]]);
       expect(page3.pagination.nextCursor).toBeNull();
-      expect(page3.pagination.prevCursor).toBe(ids[0]);
+      expect(page3.pagination.prevCursor).not.toBeNull();
     });
 
     it("backward pagination via direction=backward", () => {
@@ -736,16 +736,43 @@ describe("ContentService", () => {
         cursor: page1.pagination.nextCursor!,
       });
 
-      // Go backward from page2's first entry (id 3)
+      // Go backward from page2's first entry (id 3) — a legacy bare-id cursor,
+      // still valid for the default id sort.
       const back = contentService.listForSchema("car", {
         limit: 2,
-        cursor: page2.entries[0].id,
+        cursor: String(page2.entries[0].id),
         direction: "backward",
       });
       // Backward from id 3 with DESC sort should return ids [5, 4]
       expect(back.entries.map((e) => e.id)).toEqual([ids[4], ids[3]]);
       expect(back.pagination.prevCursor).toBeNull();
-      expect(back.pagination.nextCursor).toBe(ids[3]);
+      expect(back.pagination.nextCursor).not.toBeNull();
+    });
+
+    it("backward fetch with overflow returns the page closest to the anchor", () => {
+      const { schemaService, contentService } = setup();
+      const ids = makeCarEntries(schemaService, contentService, 5);
+
+      // Ascending id sort; go backward from the last entry (id 5) with limit 2.
+      // Rows before id 5 in display order: [1, 2, 3, 4] — the page must be the
+      // two rows closest to the anchor: [3, 4], not the furthest rows.
+      const back = contentService.listForSchema(
+        "car",
+        { limit: 2, cursor: String(ids[4]), direction: "backward" },
+        { sortField: "id", sortOrder: "asc" }
+      );
+      expect(back.entries.map((e) => e.id)).toEqual([ids[2], ids[3]]);
+      expect(back.pagination.prevCursor).not.toBeNull();
+      expect(back.pagination.nextCursor).not.toBeNull();
+
+      // Continue backward from this page's prevCursor to reach the first rows.
+      const back2 = contentService.listForSchema(
+        "car",
+        { limit: 2, cursor: back.pagination.prevCursor!, direction: "backward" },
+        { sortField: "id", sortOrder: "asc" }
+      );
+      expect(back2.entries.map((e) => e.id)).toEqual([ids[0], ids[1]]);
+      expect(back2.pagination.prevCursor).toBeNull();
     });
 
     it("exact multiple of limit: last page has nextCursor null", () => {
@@ -754,7 +781,7 @@ describe("ContentService", () => {
 
       // Default sort is DESC, so first page has ids [4, 3]
       const page1 = contentService.listForSchema("car", { limit: 2 });
-      expect(page1.pagination.nextCursor).toBe(ids[2]);
+      expect(page1.pagination.nextCursor).not.toBeNull();
 
       const page2 = contentService.listForSchema("car", {
         limit: 2,
@@ -785,15 +812,15 @@ describe("ContentService", () => {
       expect(result.pagination).toEqual({ nextCursor: null, prevCursor: null });
     });
 
-    it("invalid cursor (non-numeric) treated as no cursor", () => {
+    it("invalid cursor (undecodable) treated as no cursor", () => {
       const { schemaService, contentService } = setup();
       const ids = makeCarEntries(schemaService, contentService, 3);
 
-      // parseCursor returns null for NaN → treated as first page
+      // parseCursor returns null for undecodable input → treated as first page
       // Default sort is DESC, so first page has highest ids
       const result = contentService.listForSchema("car", {
         limit: 2,
-        cursor: NaN,
+        cursor: "not-a-cursor",
       });
       expect(result.entries.map((e) => e.id)).toEqual([ids[2], ids[1]]);
       expect(result.pagination.prevCursor).toBeNull();
@@ -803,11 +830,11 @@ describe("ContentService", () => {
       const { schemaService, contentService } = setup();
       makeCarEntries(schemaService, contentService, 3);
 
-      // Default sort is DESC. Cursor=1 means "forward from 1" which in DESC
-      // mode is "entries with id < 1" → empty.
+      // Default sort is DESC. Legacy bare-id cursor "1" means "forward from
+      // anchor (1, 1)" which in DESC mode is "entries with id < 1" → empty.
       const result = contentService.listForSchema("car", {
         limit: 10,
-        cursor: 1,
+        cursor: "1",
       });
       expect(result.entries).toEqual([]);
       expect(result.pagination).toEqual({ nextCursor: null, prevCursor: null });
@@ -1014,15 +1041,15 @@ describe("ContentService", () => {
       expect(page1.entries.map((e) => e.id)).toEqual([accord.id, bmw.id]);
       expect(page1.pagination.nextCursor).toBeDefined();
 
-      // The cursor is the last entry's id (bmw.id = 3). Forward pagination uses
-      // `id > cursor`, so page2 should have entries with id > 3.
+      // Keyset cursor: page 2 continues from the anchor row (make "BMW",
+      // bmw.id) in sort order, so it contains the remaining row — Civic.
+      // (The old bare-id cursor dropped this row because no id > bmw.id exists.)
       const page2 = contentService.listForSchema(
         "car",
         { limit: 2, cursor: page1.pagination.nextCursor! },
         { sortField: makeField.id, sortOrder: "asc" }
       );
-      // No entries have id > 3, so page2 is empty
-      expect(page2.entries.map((e) => e.id)).toEqual([]);
+      expect(page2.entries.map((e) => e.id)).toEqual([civic.id]);
       expect(page2.pagination.nextCursor).toBeNull();
     });
 
@@ -1038,6 +1065,215 @@ describe("ContentService", () => {
       // No sort params → default DESC
       const result = contentService.listForSchema("car");
       expect(result.map((e) => e.id)).toEqual([e3.id, e2.id, e1.id]);
+    });
+  });
+
+  describe("keyset pagination walks", () => {
+    function makeWalkSchema(ss: SchemaService) {
+      return ss.create(
+        "car",
+        [
+          { label: "make", type: "text", required: true },
+          { label: "tag", type: "text", required: false },
+          { label: "year", type: "number", required: false },
+        ],
+        "editor1"
+      );
+    }
+
+    /** Walk forward from page 1 with a small limit; returns every page. */
+    function walkForward(
+      contentService: ContentService,
+      sort: { sortField: number; sortOrder: "asc" | "desc" },
+      limit: number
+    ) {
+      const pages: { ids: number[]; pagination: { nextCursor: string | null; prevCursor: string | null } }[] = [];
+      let cursor: string | undefined;
+      for (;;) {
+        const page = contentService.listForSchema(
+          "car",
+          cursor === undefined ? { limit } : { limit, cursor },
+          sort
+        );
+        pages.push({ ids: page.entries.map((e) => e.id), pagination: page.pagination });
+        if (page.pagination.nextCursor === null) break;
+        cursor = page.pagination.nextCursor;
+      }
+      return pages;
+    }
+
+    it("text field asc: walk visits every entry exactly once in display order; backward returns previous page", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeWalkSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const tagField = car.fields.find((f) => f.label === "tag")!;
+
+      // Sort order deliberately disagrees with id order: e1 is created first
+      // but updated to sort last. e4 has no value for the sort field (NULL).
+      const e1 = contentService.create("car", { [String(makeField.id)]: "A", [String(tagField.id)]: "beta" }, "editor1");
+      const e2 = contentService.create("car", { [String(makeField.id)]: "B", [String(tagField.id)]: "alpha" }, "editor1");
+      const e3 = contentService.create("car", { [String(makeField.id)]: "C", [String(tagField.id)]: "gamma" }, "editor1");
+      contentService.update(e1.id, { [String(tagField.id)]: "zeta" }, "editor1");
+      const e4 = contentService.create("car", { [String(makeField.id)]: "D" }, "editor1");
+
+      // Display order (tag asc, NULLs last): alpha(e2) < gamma(e3) < zeta(e1) < NULL(e4)
+      const pages = walkForward(contentService, { sortField: tagField.id, sortOrder: "asc" }, 2);
+      expect(pages.map((p) => p.ids)).toEqual([[e2.id, e3.id], [e1.id, e4.id]]);
+
+      // Cursors are null exactly at the ends.
+      expect(pages[0].pagination.prevCursor).toBeNull();
+      expect(pages[0].pagination.nextCursor).not.toBeNull();
+      expect(pages[pages.length - 1].pagination.nextCursor).toBeNull();
+
+      // Backward navigation from page 2 returns page 1's rows.
+      const back = contentService.listForSchema(
+        "car",
+        { limit: 2, cursor: pages[1].pagination.prevCursor!, direction: "backward" },
+        { sortField: tagField.id, sortOrder: "asc" }
+      );
+      expect(back.entries.map((e) => e.id)).toEqual(pages[0].ids);
+      expect(back.pagination.prevCursor).toBeNull();
+    });
+
+    it("text field desc: walk visits every entry exactly once in display order; backward returns previous page", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeWalkSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const tagField = car.fields.find((f) => f.label === "tag")!;
+
+      const e1 = contentService.create("car", { [String(makeField.id)]: "A", [String(tagField.id)]: "beta" }, "editor1");
+      const e2 = contentService.create("car", { [String(makeField.id)]: "B", [String(tagField.id)]: "alpha" }, "editor1");
+      const e3 = contentService.create("car", { [String(makeField.id)]: "C", [String(tagField.id)]: "gamma" }, "editor1");
+      contentService.update(e1.id, { [String(tagField.id)]: "zeta" }, "editor1");
+      const e4 = contentService.create("car", { [String(makeField.id)]: "D" }, "editor1");
+
+      // Display order (tag desc, NULLs last): zeta(e1) > gamma(e3) > alpha(e2) > NULL(e4)
+      const pages = walkForward(contentService, { sortField: tagField.id, sortOrder: "desc" }, 2);
+      expect(pages.map((p) => p.ids)).toEqual([[e1.id, e3.id], [e2.id, e4.id]]);
+
+      expect(pages[0].pagination.prevCursor).toBeNull();
+      expect(pages[0].pagination.nextCursor).not.toBeNull();
+      expect(pages[pages.length - 1].pagination.nextCursor).toBeNull();
+
+      const back = contentService.listForSchema(
+        "car",
+        { limit: 2, cursor: pages[1].pagination.prevCursor!, direction: "backward" },
+        { sortField: tagField.id, sortOrder: "desc" }
+      );
+      expect(back.entries.map((e) => e.id)).toEqual(pages[0].ids);
+      expect(back.pagination.prevCursor).toBeNull();
+    });
+
+    it("number field asc: walk visits every entry exactly once in display order; backward returns previous page", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeWalkSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const yearField = car.fields.find((f) => f.label === "year")!;
+
+      // n1 is created first but updated to sort last. n4 has no value (NULL).
+      const n1 = contentService.create("car", { [String(makeField.id)]: "A", [String(yearField.id)]: 2020 }, "editor1");
+      const n2 = contentService.create("car", { [String(makeField.id)]: "B", [String(yearField.id)]: 2019 }, "editor1");
+      const n3 = contentService.create("car", { [String(makeField.id)]: "C", [String(yearField.id)]: 2021 }, "editor1");
+      contentService.update(n1.id, { [String(yearField.id)]: 2025 }, "editor1");
+      const n4 = contentService.create("car", { [String(makeField.id)]: "D" }, "editor1");
+
+      // Display order (year asc, NULLs last): 2019(n2) < 2021(n3) < 2025(n1) < NULL(n4)
+      const pages = walkForward(contentService, { sortField: yearField.id, sortOrder: "asc" }, 2);
+      expect(pages.map((p) => p.ids)).toEqual([[n2.id, n3.id], [n1.id, n4.id]]);
+
+      expect(pages[0].pagination.prevCursor).toBeNull();
+      expect(pages[0].pagination.nextCursor).not.toBeNull();
+      expect(pages[pages.length - 1].pagination.nextCursor).toBeNull();
+
+      const back = contentService.listForSchema(
+        "car",
+        { limit: 2, cursor: pages[1].pagination.prevCursor!, direction: "backward" },
+        { sortField: yearField.id, sortOrder: "asc" }
+      );
+      expect(back.entries.map((e) => e.id)).toEqual(pages[0].ids);
+      expect(back.pagination.prevCursor).toBeNull();
+    });
+
+    it("number field desc: walk visits every entry exactly once in display order; backward returns previous page", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeWalkSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const yearField = car.fields.find((f) => f.label === "year")!;
+
+      const n1 = contentService.create("car", { [String(makeField.id)]: "A", [String(yearField.id)]: 2020 }, "editor1");
+      const n2 = contentService.create("car", { [String(makeField.id)]: "B", [String(yearField.id)]: 2019 }, "editor1");
+      const n3 = contentService.create("car", { [String(makeField.id)]: "C", [String(yearField.id)]: 2021 }, "editor1");
+      contentService.update(n1.id, { [String(yearField.id)]: 2025 }, "editor1");
+      const n4 = contentService.create("car", { [String(makeField.id)]: "D" }, "editor1");
+
+      // Display order (year desc, NULLs last): 2025(n1) > 2021(n3) > 2019(n2) > NULL(n4)
+      const pages = walkForward(contentService, { sortField: yearField.id, sortOrder: "desc" }, 2);
+      expect(pages.map((p) => p.ids)).toEqual([[n1.id, n3.id], [n2.id, n4.id]]);
+
+      expect(pages[0].pagination.prevCursor).toBeNull();
+      expect(pages[0].pagination.nextCursor).not.toBeNull();
+      expect(pages[pages.length - 1].pagination.nextCursor).toBeNull();
+
+      const back = contentService.listForSchema(
+        "car",
+        { limit: 2, cursor: pages[1].pagination.prevCursor!, direction: "backward" },
+        { sortField: yearField.id, sortOrder: "desc" }
+      );
+      expect(back.entries.map((e) => e.id)).toEqual(pages[0].ids);
+      expect(back.pagination.prevCursor).toBeNull();
+    });
+
+    it("text field asc: backward from a NULL-valued anchor returns the preceding rows", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeWalkSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const tagField = car.fields.find((f) => f.label === "tag")!;
+
+      const e1 = contentService.create("car", { [String(makeField.id)]: "A", [String(tagField.id)]: "beta" }, "editor1");
+      const e2 = contentService.create("car", { [String(makeField.id)]: "B", [String(tagField.id)]: "alpha" }, "editor1");
+      const e3 = contentService.create("car", { [String(makeField.id)]: "C", [String(tagField.id)]: "gamma" }, "editor1");
+      contentService.update(e1.id, { [String(tagField.id)]: "zeta" }, "editor1");
+      const e4 = contentService.create("car", { [String(makeField.id)]: "D" }, "editor1");
+
+      // Display order (tag asc, NULLs last): alpha(e2) < gamma(e3) < zeta(e1) < NULL(e4).
+      // Walk forward with limit 1 to the page holding only the NULL row.
+      const sort = { sortField: tagField.id, sortOrder: "asc" as const };
+      const p1 = contentService.listForSchema("car", { limit: 1 }, sort);
+      const p2 = contentService.listForSchema("car", { limit: 1, cursor: p1.pagination.nextCursor! }, sort);
+      const p3 = contentService.listForSchema("car", { limit: 1, cursor: p2.pagination.nextCursor! }, sort);
+      const p4 = contentService.listForSchema("car", { limit: 1, cursor: p3.pagination.nextCursor! }, sort);
+      expect(p4.entries.map((e) => e.id)).toEqual([e4.id]);
+      expect(p4.pagination.nextCursor).toBeNull();
+
+      // Backward from the NULL-valued anchor: every non-NULL row is "before"
+      // it in display order; the page is the two rows closest to the anchor.
+      const back = contentService.listForSchema(
+        "car",
+        { limit: 2, cursor: p4.pagination.prevCursor!, direction: "backward" },
+        sort
+      );
+      expect(back.entries.map((e) => e.id)).toEqual([e3.id, e1.id]);
+      expect(back.pagination.prevCursor).not.toBeNull();
+    });
+
+    it("legacy bare-id cursor on a field sort falls back to the first page", () => {
+      const { schemaService, contentService } = setup();
+      const car = makeWalkSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const tagField = car.fields.find((f) => f.label === "tag")!;
+
+      const e1 = contentService.create("car", { [String(makeField.id)]: "A", [String(tagField.id)]: "beta" }, "editor1");
+      const e2 = contentService.create("car", { [String(makeField.id)]: "B", [String(tagField.id)]: "alpha" }, "editor1");
+
+      // "2" is a legacy id cursor — meaningless for a tag sort, so it is
+      // treated as no cursor (first page).
+      const result = contentService.listForSchema(
+        "car",
+        { limit: 10, cursor: "2" },
+        { sortField: tagField.id, sortOrder: "asc" }
+      );
+      expect(result.entries.map((e) => e.id)).toEqual([e2.id, e1.id]);
+      expect(result.pagination.prevCursor).toBeNull();
     });
   });
 });

@@ -49,8 +49,10 @@ export function parsePaginationParams(req: Request): PaginationParams | undefine
   }
 
   if (hasCursor) {
-    const n = Number(req.query.cursor);
-    if (Number.isFinite(n)) params.cursor = n;
+    // The cursor is an opaque string carried unchanged to the service/repo,
+    // which decodes it (undecodable → first page).
+    const raw = req.query.cursor;
+    if (typeof raw === "string") params.cursor = raw;
   }
 
   const dir = req.query.direction;

@@ -6,7 +6,8 @@ export type EntryValues = Record<string, ContentValue | null>;
 
 export interface PaginationParams {
   limit?: number;
-  cursor?: number;
+  /** Opaque cursor string from the server's pagination response. */
+  cursor?: string;
   direction?: "forward" | "backward";
 }
 
