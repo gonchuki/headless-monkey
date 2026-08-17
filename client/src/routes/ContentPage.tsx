@@ -145,13 +145,14 @@ export default function ContentPage() {
   const remove = deleteSource.remove;
 
   // Filtered view: always pass pagination params (undefined on first page = non-paginated)
-  const filtered = useEntries(selected ?? "", true, paginationParams, allView ? undefined : sort);
+  const filtered = useEntries(selected ?? "", true, paginationParams, allView ? undefined : sort, conflictedOnly);
 
   // All-view entries: driven by per-schema state model
   const allEntriesQuery = useAllEntries(
     allView ? schemas.map((schema) => schema.name) : [],
     allViewState,
     PAGE_LIMIT,
+    conflictedOnly,
   );
 
   // Determine entries and pagination based on view type
@@ -194,8 +195,6 @@ export default function ContentPage() {
     const base = allView ? "/content" : `/content/${encodeURIComponent(selected ?? "")}`;
     navigate(qs ? `${base}?${qs}` : base, { replace: true });
   }, [entriesIsError, entriesError, searchParams, allView, selected, navigate]);
-
-  const visibleEntries = conflictedOnly ? entries.filter((entry) => entry.conflict) : entries;
 
   // ---- Pagination availability ----
   let hasNextPage: boolean;
@@ -538,24 +537,19 @@ export default function ContentPage() {
 
       {schemas.length > 0 && !entriesIsPending && !entriesIsError && entries.length === 0 && (
         <Alert>
-          <AlertTitle>No entries yet</AlertTitle>
-          <AlertDescription>{allView ? "Add the first entry to a schema." : "Add the first entry to this schema."}</AlertDescription>
-        </Alert>
-      )}
-
-      {schemas.length > 0 && !entriesIsPending && !entriesIsError && entries.length > 0 && conflictedOnly && visibleEntries.length === 0 && (
-        <Alert>
-          <AlertTitle>No conflicted entries</AlertTitle>
+          <AlertTitle>{conflictedOnly ? "No conflicted entries" : "No entries yet"}</AlertTitle>
           <AlertDescription>
-            {allView ? "No entries are conflicted across all schemas." : "No entries are conflicted in this schema."}
+            {conflictedOnly
+              ? allView ? "No entries are conflicted across all schemas." : "No entries are conflicted in this schema."
+              : allView ? "Add the first entry to a schema." : "Add the first entry to this schema."}
           </AlertDescription>
         </Alert>
       )}
 
-      {schemas.length > 0 && !entriesIsPending && !entriesIsError && visibleEntries.length > 0 && (
+      {schemas.length > 0 && !entriesIsPending && !entriesIsError && entries.length > 0 && (
         <>
           <ul className="divide-y overflow-hidden rounded-xl border bg-card">
-            {visibleEntries.map((entry) => {
+            {entries.map((entry) => {
               const entryDeleted = deletedSchemas.has(entry.schema);
               const labelFieldId = labelFieldIds.get(entry.schema) ?? null;
               return (

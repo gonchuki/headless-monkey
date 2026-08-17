@@ -22,6 +22,7 @@ export function useAllEntries(
   schemaNames: string[],
   state: AllViewState,
   limit: number,
+  conflictedOnly = false,
 ): AllEntriesQuery {
   const schemas = [...new Set(schemaNames.filter((name) => name.length > 0))];
 
@@ -39,13 +40,14 @@ export function useAllEntries(
     queries: queryConfigs.map(({ schema, cursor, direction }) => ({
       queryKey: [
         ...queryKeys.entries(schema),
-        { allView: true, cursor, direction },
+        { allView: true, cursor, direction, conflicted: conflictedOnly },
       ] as const,
       queryFn: () => {
         const params = new URLSearchParams();
         params.set("limit", String(limit));
         if (cursor != null) params.set("cursor", cursor);
         if (direction) params.set("direction", direction);
+        if (conflictedOnly) params.set("conflicted", "1");
         const qs = params.toString();
         const url = `/api/schemas/${encodeURIComponent(schema)}/entries${qs ? `?${qs}` : ""}`;
         return apiFetch<PaginatedEntries>(url);

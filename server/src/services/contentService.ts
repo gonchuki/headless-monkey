@@ -159,16 +159,19 @@ export class ContentService {
   listForSchema(
     schemaName: string,
     pagination: PaginationParams,
-    sort?: SortParams
+    sort?: SortParams,
+    conflictedOnly?: boolean
   ): { entries: ContentListEntry[]; pagination: PaginationResponse };
   listForSchema(
     schemaName: string,
-    sort: SortParams
+    sort: SortParams,
+    conflictedOnly?: boolean
   ): ContentListEntry[];
   listForSchema(
     schemaName: string,
-    paginationOrSort?: PaginationParams | SortParams,
-    sort?: SortParams
+    arg1?: PaginationParams | SortParams | boolean,
+    arg2?: SortParams | boolean,
+    arg3?: boolean
   ):
     | ContentListEntry[]
     | { entries: ContentListEntry[]; pagination: PaginationResponse } {
@@ -180,21 +183,33 @@ export class ContentService {
     // When the first arg has sortField, it's a sort; otherwise treat as pagination.
     let pagination: PaginationParams | undefined;
     let resolvedSort: ResolvedSortParams | undefined;
+    let conflictedOnly = false;
 
-    if (paginationOrSort && "sortField" in paginationOrSort) {
-      resolvedSort = this.resolveSort(schema, paginationOrSort as SortParams);
-      if (sort) {
-        // sort was passed as a third arg alongside a sort-first arg — shouldn't happen,
-        // but handle it by using the third arg as the actual sort.
-        resolvedSort = this.resolveSort(schema, sort);
+    if (typeof arg1 === "boolean") {
+      // listForSchema(name, conflictedOnly)
+      conflictedOnly = arg1;
+    } else if (arg1 && typeof arg1 === "object" && "sortField" in arg1) {
+      // listForSchema(name, sort, conflictedOnly?)
+      resolvedSort = this.resolveSort(schema, arg1 as SortParams);
+      if (typeof arg2 === "boolean") conflictedOnly = arg2;
+    } else if (arg1 && typeof arg1 === "object") {
+      // listForSchema(name, pagination, sort?, conflictedOnly?)
+      pagination = arg1 as PaginationParams;
+      if (arg2 && typeof arg2 === "object" && "sortField" in arg2) {
+        resolvedSort = this.resolveSort(schema, arg2 as SortParams);
+        if (typeof arg3 === "boolean") conflictedOnly = arg3;
+      } else if (typeof arg2 === "boolean") {
+        conflictedOnly = arg2;
+      } else if (typeof arg3 === "boolean") {
+        // pagination, undefined sort, conflictedOnly
+        conflictedOnly = arg3;
       }
-    } else if (paginationOrSort) {
-      pagination = paginationOrSort as PaginationParams;
-      resolvedSort = sort ? this.resolveSort(schema, sort) : undefined;
     }
 
+    const maxVersion = conflictedOnly ? schema.compat_version : undefined;
+
     if (pagination !== undefined) {
-      const result = this.repo.listEntriesPaginated(schemaName, pagination, resolvedSort);
+      const result = this.repo.listEntriesPaginated(schemaName, pagination, resolvedSort, undefined, maxVersion);
       return {
         entries: result.entries.map((entry) =>
           this.toEntry(entry, schema, true, "editor")
@@ -203,7 +218,7 @@ export class ContentService {
       };
     }
     return this.repo
-      .listEntries(schemaName, resolvedSort)
+      .listEntries(schemaName, resolvedSort, undefined, maxVersion)
       .map((entry) => this.toEntry(entry, schema, true, "editor"));
   }
 

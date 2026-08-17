@@ -100,3 +100,12 @@ export function parseSortParams(req: Request): SortParams | undefined {
 
   return params;
 }
+
+/**
+ * Parse the conflicted-only filter query param.
+ * `?conflicted=1` turns the filter on; any other value (absent, `0`, garbage)
+ * turns it off. Lenient — no 422.
+ */
+export function parseConflictedParam(req: Request): boolean {
+  return req.query.conflicted === "1";
+}
