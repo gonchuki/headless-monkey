@@ -85,6 +85,10 @@ export interface PaginationResponse {
   prevCursor: string | null;
 }
 
+export interface EntryCountResponse {
+  count: number;
+}
+
 export type ContentValue = string | number | boolean;
 
 export interface ContentEntry {

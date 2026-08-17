@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   apiFetch,
+  type EntryCountResponse,
   type FieldType,
   type SchemaEntry,
-  type SchemaEntryRow,
   type SchemaFieldInput,
   type SchemaUpdatePreview,
 } from "@/lib/api";
@@ -92,10 +92,10 @@ export function useSchemas() {
 
 export function useSchemaEntryCount(schemaName: string, enabled: boolean) {
   return useQuery({
-    queryKey: queryKeys.entries(schemaName),
-    queryFn: () => apiFetch<SchemaEntryRow[]>(`/api/schemas/${encodeURIComponent(schemaName)}/entries`),
+    queryKey: queryKeys.entryCount(schemaName),
+    queryFn: () => apiFetch<EntryCountResponse>(`/api/schemas/${encodeURIComponent(schemaName)}/entries/count`),
     enabled,
-    select: (rows) => rows.length,
+    select: (data) => data.count,
   });
 }
 

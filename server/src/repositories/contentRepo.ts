@@ -361,6 +361,13 @@ export class ContentRepository {
     );
   }
 
+  countBySchema(schemaName: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS count FROM content WHERE schema = ?")
+      .get(schemaName) as { count: number };
+    return row.count;
+  }
+
   /**
    * The SQL expression for the sort column, derived once and shared by the
    * ORDER BY clause, the keyset WHERE clause, and cursor value extraction.

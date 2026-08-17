@@ -28,6 +28,16 @@ export function createEntriesRouter(
   const router: Router = Router({ mergeParams: true });
 
   // Mounted at /api/schemas/:name/entries
+  router.get("/count", (req: Request, res: Response) => {
+    try {
+      const name = typeof req.params.name === "string" ? req.params.name : "";
+      const count = contentService.countForSchema(name);
+      res.json({ count });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   router.get("/", (req: Request, res: Response) => {
     try {
       const name = typeof req.params.name === "string" ? req.params.name : "";

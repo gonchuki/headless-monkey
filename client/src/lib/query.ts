@@ -4,4 +4,5 @@ export const queryKeys = {
   schemas: () => ["schemas"] as const,
   schema: (name: string) => ["schemas", "detail", name] as const,
   entries: (schema: string) => ["schemas", "entries", schema] as const,
+  entryCount: (schema: string) => ["schemas", "entryCount", schema] as const,
 };
