@@ -185,3 +185,115 @@ describe("greenfield DDL baseline (PLAN-24)", () => {
     db.close();
   });
 });
+
+describe("secondary indexes (PLAN-69)", () => {
+  it("creates all four indexes on a fresh database", () => {
+    const db = openDatabase();
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'")
+      .all() as Array<{ name: string }>;
+    const names = indexes.map((r) => r.name);
+
+    // Pre-existing index from 001_initial_schema
+    expect(names).toContain("idx_content_refs_target");
+    // Three new indexes from 002_secondary_indexes
+    expect(names).toContain("idx_content_schema");
+    expect(names).toContain("idx_content_rows_field_id");
+    expect(names).toContain("idx_content_refs_field_id");
+
+    db.close();
+  });
+
+  it("uses idx_content_schema for WHERE content.schema = ?", () => {
+    const db = openDatabase();
+
+    // Seed a row so the plan is meaningful
+    db.prepare(
+      `INSERT INTO schemas (name, creation_date, created_by, last_modified_date, last_modified_by, version, compat_version) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run("car", new Date().toISOString(), "editor1", new Date().toISOString(), "editor1", 1, 1);
+    db.prepare(
+      `INSERT INTO content (schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("car", 1, new Date().toISOString(), "editor1", new Date().toISOString(), "editor1");
+
+    // Use a literal value instead of ? — EXPLAIN QUERY PLAN does not execute,
+    // but better-sqlite3 still validates parameter count on prepare.
+    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT * FROM content WHERE schema = 'car'").all();
+    const planStr = JSON.stringify(plan);
+
+    // Index name must appear; bare SCAN of content table must not
+    expect(planStr).toContain("idx_content_schema");
+    expect(planStr).not.toMatch(/SCAN.*content\b/);
+
+    db.close();
+  });
+
+  it("uses idx_content_rows_field_id for WHERE content_rows.field_id = ?", () => {
+    const db = openDatabase();
+
+    // Seed schema + field + content so FK constraints are satisfied
+    db.prepare(
+      `INSERT INTO schemas (name, creation_date, created_by, last_modified_date, last_modified_by, version, compat_version) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run("car", new Date().toISOString(), "editor1", new Date().toISOString(), "editor1", 1, 1);
+    db.prepare(
+      `INSERT INTO schema_fields (schema, label, type, required, ref_schema, sort_order) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("car", "make", "text", 1, null, 0);
+    db.prepare(
+      `INSERT INTO content (schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("car", 1, new Date().toISOString(), "editor1", new Date().toISOString(), "editor1");
+    db.prepare(
+      `INSERT INTO content_rows (content_id, field_id, value) VALUES (?, ?, ?)`
+    ).run(1, 1, '"Toyota"');
+
+    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT * FROM content_rows WHERE field_id = 1").all();
+    const planStr = JSON.stringify(plan);
+
+    expect(planStr).toContain("idx_content_rows_field_id");
+    expect(planStr).not.toMatch(/SCAN.*content_rows\b/);
+
+    db.close();
+  });
+
+  it("uses idx_content_refs_field_id for WHERE content_refs.field_id = ?", () => {
+    const db = openDatabase();
+
+    // Seed: person schema (target), car schema with schema-ref field
+    db.prepare(
+      `INSERT INTO schemas (name, creation_date, created_by, last_modified_date, last_modified_by, version, compat_version) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run("person", new Date().toISOString(), "editor1", new Date().toISOString(), "editor1", 1, 1);
+    db.prepare(
+      `INSERT INTO schema_fields (schema, label, type, required, ref_schema, sort_order) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("person", "name", "text", 1, null, 0);
+    const personResult = db.prepare(
+      `INSERT INTO content (schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("person", 1, new Date().toISOString(), "editor1", new Date().toISOString(), "editor1");
+    const personId = Number(personResult.lastInsertRowid);
+
+    db.prepare(
+      `INSERT INTO schemas (name, creation_date, created_by, last_modified_date, last_modified_by, version, compat_version) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run("car", new Date().toISOString(), "editor1", new Date().toISOString(), "editor1", 1, 1);
+    db.prepare(
+      `INSERT INTO schema_fields (schema, label, type, required, ref_schema, sort_order) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("car", "owner", "schema-ref", 1, "person", 0);
+    const ownerFieldId = (
+      db.prepare(`SELECT id FROM schema_fields WHERE schema = 'car' AND label = 'owner'`).get() as { id: number }
+    ).id;
+
+    const carResult = db.prepare(
+      `INSERT INTO content (schema, schema_version, creation_date, created_by, last_modified_date, last_modified_by) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("car", 1, new Date().toISOString(), "editor1", new Date().toISOString(), "editor1");
+    const carId = Number(carResult.lastInsertRowid);
+
+    db.prepare(
+      `INSERT INTO content_refs (content_id, field_id, target_content_id) VALUES (?, ?, ?)`
+    ).run(carId, ownerFieldId, personId);
+
+    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT * FROM content_refs WHERE field_id = 1").all();
+    const planStr = JSON.stringify(plan);
+
+    expect(planStr).toContain("idx_content_refs_field_id");
+    expect(planStr).not.toMatch(/SCAN.*content_refs\b/);
+
+    db.close();
+  });
+});

@@ -65,6 +65,17 @@ const MIGRATIONS: { name: string; sql: string }[] = [
       CREATE INDEX idx_content_refs_target ON content_refs(target_content_id);
     `,
   },
+  // Additive, semantics-preserving: creates secondary indexes for hot queries.
+  // Does not change schema shape, query results, or FK behavior — only SQLite's plan choice.
+  // Not yet listed in SPEC §4's frozen DDL block; a separate SPEC revision may mirror these.
+  {
+    name: "002_secondary_indexes",
+    sql: `
+      CREATE INDEX idx_content_schema ON content(schema);
+      CREATE INDEX idx_content_rows_field_id ON content_rows(field_id);
+      CREATE INDEX idx_content_refs_field_id ON content_refs(field_id);
+    `,
+  },
 ];
 
 export function applyMigrations(db: Db): void {
