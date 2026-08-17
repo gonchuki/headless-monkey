@@ -791,6 +791,224 @@ describe("SchemaService", () => {
       expect(listed.find((e) => e.id === entryB.id)?.conflict).toBe(false);
     });
 
+    it("compound: number/optional → text/required is breaking (R13+R14)", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "year", type: "number", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const yearField = schema.fields.find((f) => f.label === "year")!;
+
+      // Entry A: has a number value for year → will coerce to text (R17)
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota", [String(yearField.id)]: 2020 },
+        "editor1"
+      );
+
+      // Entry B: no value for year → will be conflicted (missing required)
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda" },
+        "editor1"
+      );
+
+      // PATCH: number/optional → text/required
+      const updated = schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: yearField.id, label: "year", type: "text", required: true },
+      ], "editor1");
+
+      // Breaking: compat_version bumps to new version
+      expect(updated.version).toBe(2);
+      expect(updated.compat_version).toBe(2);
+
+      // Entry A: number coerces to text (R17) → compatible, bumped
+      const entryAAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryA.id) as { schema_version: number };
+      expect(entryAAfter.schema_version).toBe(2);
+
+      // Entry B: missing required value → conflicted, not bumped
+      const entryBAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(entryB.id) as { schema_version: number };
+      expect(entryBAfter.schema_version).toBe(1);
+
+      // Verify via listForSchema and public API
+      const listed = contentService.listForSchema("car");
+      expect(listed.find((e) => e.id === entryA.id)?.conflict).toBe(false);
+      expect(listed.find((e) => e.id === entryB.id)?.conflict).toBe(true);
+
+      expect(contentService.listPublic("car")).toHaveLength(1);
+      expect(contentService.listPublic("car")[0].id).toBe(entryA.id);
+
+      let caught: unknown;
+      try {
+        contentService.getPublic("car", entryB.id);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ContentServiceError);
+      expect((caught as ContentServiceError).statusCode).toBe(422);
+    });
+
+    it("compound: number/optional → text/required preview reports affected entries", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "year", type: "number", required: false },
+      ], "editor1");
+
+      const schema = schemaService.get("car")!;
+      const makeField = schema.fields.find((f) => f.label === "make")!;
+      const yearField = schema.fields.find((f) => f.label === "year")!;
+
+      // Entry A: has a number value for year → will coerce to text (R17), not affected
+      const entryA = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Toyota", [String(yearField.id)]: 2020 },
+        "editor1"
+      );
+
+      // Entry B: no value for year → will be conflicted (missing required), affected
+      const entryB = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Honda" },
+        "editor1"
+      );
+
+      // Preview: same payload should report breaking + entry B affected
+      const preview = schemaService.previewUpdate("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: yearField.id, label: "year", type: "text", required: true },
+      ]);
+      expect(preview.breaking).toBe(true);
+      expect(preview.affectedEntries.find((e) => e.id === entryB.id)?.affectedFieldIds).toContain(yearField.id);
+      expect(preview.affectedEntries.find((e) => e.id === entryA.id)).toBeUndefined();
+    });
+
+    it("compound: schema-ref A/required → schema-ref B/optional is breaking (R14+R35)", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("company", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: true, ref_schema: "person" },
+      ], "editor1");
+
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const personNameField = person.fields[0];
+
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      // Verify the content_refs row exists before retarget
+      const refBefore = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refBefore).toBeDefined();
+
+      // PATCH: schema-ref person/required → schema-ref company/optional
+      const updated = schemaService.update("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+      ], "editor1");
+
+      // Breaking: compat_version = version (retarget is breaking)
+      expect(updated.version).toBe(2);
+      expect(updated.compat_version).toBe(2);
+
+      // R35: content_refs purged
+      const refAfter = db
+        .prepare("SELECT 1 FROM content_refs WHERE content_id = ? AND field_id = ?")
+        .get(carEntry.id, ownerField.id);
+      expect(refAfter).toBeUndefined();
+
+      // R35 no-bump gate: schema_version unchanged
+      const entryAfter = db
+        .prepare(`SELECT schema_version FROM content WHERE id = ?`)
+        .get(carEntry.id) as { schema_version: number };
+      expect(entryAfter.schema_version).toBe(carEntry.schema_version);
+
+      // Entry is now conflicted (compat_version bumped past its schema_version)
+      expect(contentService.listPublic("car")).toHaveLength(0);
+
+      let caught: unknown;
+      try {
+        contentService.getPublic("car", carEntry.id);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ContentServiceError);
+      expect((caught as ContentServiceError).statusCode).toBe(422);
+    });
+
+    it("compound: schema-ref A/required → schema-ref B/optional preview reports affected entries", () => {
+      const db = openDatabase();
+      const schemaService = new SchemaService(db);
+      const contentService = new ContentService(db);
+
+      const person = schemaService.create("person", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      schemaService.create("company", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+      const car = schemaService.create("car", [
+        { label: "make", type: "text", required: true },
+        { label: "owner", type: "schema-ref", required: true, ref_schema: "person" },
+      ], "editor1");
+
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const personNameField = person.fields[0];
+
+      const personEntry = contentService.create(
+        "person",
+        { [String(personNameField.id)]: "Alice" },
+        "editor1"
+      );
+      const carEntry = contentService.create(
+        "car",
+        { [String(makeField.id)]: "Civic", [String(ownerField.id)]: personEntry.id },
+        "editor1"
+      );
+
+      // Preview: same payload should report breaking + car entry affected
+      const preview = schemaService.previewUpdate("car", [
+        { id: makeField.id, label: "make", type: "text", required: true },
+        { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+      ]);
+      expect(preview.breaking).toBe(true);
+      expect(preview.affectedEntries.find((e) => e.id === carEntry.id)?.affectedFieldIds).toContain(ownerField.id);
+    });
+
     it("non-breaking change does not bump already-non-conflicted entries", () => {
       const db = openDatabase();
       const schemaService = new SchemaService(db);
