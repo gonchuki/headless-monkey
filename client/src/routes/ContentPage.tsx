@@ -32,6 +32,14 @@ import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
 import { SchemaBadge } from "@/components/shared/SchemaBadge";
 import { Switch } from "@/components/ui/switch";
+import {
+  decodeState,
+  encodeState,
+  advance,
+  retreat,
+  hasNext as hasNextLib,
+  hasPrev as hasPrevLib,
+} from "@/lib/allViewPagination";
 
 const ALL_SCHEMAS_VALUE = "__all__";
 const PAGE_LIMIT = 50;
@@ -51,9 +59,8 @@ function buildListUrl(opts: { allView: boolean; selected: string | null; conflic
   return qs ? `${base}?${qs}` : base;
 }
 
-/** Build a URL for a specific page, preserving conflicted filter and sort. */
-function buildPageUrl(opts: {
-  allView: boolean;
+/** Build a URL for a specific page in the single-schema view. */
+function buildSingleSchemaPageUrl(opts: {
   selected: string | null;
   conflictedOnly: boolean;
   targetPage: number;
@@ -61,7 +68,7 @@ function buildPageUrl(opts: {
   sortField?: string | null;
   sortOrder?: string | null;
 }): string {
-  const base = opts.allView ? "/content" : `/content/${encodeURIComponent(opts.selected ?? "")}`;
+  const base = `/content/${encodeURIComponent(opts.selected ?? "")}`;
   const params = new URLSearchParams();
   if (opts.conflictedOnly) params.set("conflicted", "1");
   if (opts.targetPage > 1) params.set("page", String(opts.targetPage));
@@ -76,6 +83,22 @@ function buildPageUrl(opts: {
   if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
   const qs = params.toString();
   return qs ? `${base}?${qs}` : base;
+}
+
+/** Build a URL for the all-view with the given allview state encoded. */
+function buildAllViewPageUrl(opts: {
+  conflictedOnly: boolean;
+  allviewState: string;
+  sortField?: string | null;
+  sortOrder?: string | null;
+}): string {
+  const params = new URLSearchParams();
+  if (opts.conflictedOnly) params.set("conflicted", "1");
+  params.set("allview", opts.allviewState);
+  if (opts.sortField) params.set("sort_field", opts.sortField);
+  if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
+  const qs = params.toString();
+  return `/content?${qs}`;
 }
 
 export default function ContentPage() {
@@ -97,14 +120,15 @@ export default function ContentPage() {
   const sortOrder: "asc" | "desc" = sortOrderRaw === "asc" ? "asc" : "desc";
   const sort: SortParams = { sortField, sortOrder };
 
-  // Pagination state from URL
+  // ---- All-view pagination state ----
+  const allViewState = decodeState(searchParams.get("allview"));
+
+  // ---- Single-schema pagination state (unchanged) ----
   const page = Number(searchParams.get("page")) || 1;
   const cursorNext = searchParams.get("cursor_next");
   const cursorPrev = searchParams.get("cursor_prev");
 
   const hasCursorState = cursorNext != null || cursorPrev != null;
-  // Cursors are opaque strings: carried from the URL to the query and back,
-  // unchanged.
   const paginationParams: PaginationParams | undefined = hasCursorState
     ? {
         limit: PAGE_LIMIT,
@@ -122,7 +146,12 @@ export default function ContentPage() {
   // Filtered view: always pass pagination params (undefined on first page = non-paginated)
   const filtered = useEntries(selected ?? "", true, paginationParams, allView ? undefined : sort);
 
-  const allEntriesQuery = useAllEntries(allView ? schemas.map((schema) => schema.name) : [], paginationParams);
+  // All-view entries: driven by per-schema state model
+  const allEntriesQuery = useAllEntries(
+    allView ? schemas.map((schema) => schema.name) : [],
+    allViewState,
+    PAGE_LIMIT,
+  );
 
   // Determine entries and pagination based on view type
   let entries: ContentListEntry[];
@@ -134,7 +163,8 @@ export default function ContentPage() {
 
   if (allView) {
     entries = allEntriesQuery.data;
-    pagination = allEntriesQuery.pagination;
+    // Build a dummy pagination response for compatibility — not used in all-view
+    pagination = { nextCursor: null, prevCursor: null };
     entriesIsPending = allEntriesQuery.isPending;
     entriesIsError = allEntriesQuery.isError;
     entriesError = allEntriesQuery.error;
@@ -149,8 +179,21 @@ export default function ContentPage() {
   }
 
   const visibleEntries = conflictedOnly ? entries.filter((entry) => entry.conflict) : entries;
-  const hasNextPage = pagination.nextCursor != null;
-  const hasPrevPage = hasCursorState && pagination.prevCursor != null;
+
+  // ---- Pagination availability ----
+  let hasNextPage: boolean;
+  let hasPrevPage: boolean;
+  let displayPage: number;
+
+  if (allView) {
+    hasNextPage = hasNextLib(allViewState, allEntriesQuery.nextCursors);
+    hasPrevPage = hasPrevLib(allViewState);
+    displayPage = allViewState.depth;
+  } else {
+    hasNextPage = pagination.nextCursor != null;
+    hasPrevPage = hasCursorState && pagination.prevCursor != null;
+    displayPage = page;
+  }
 
   const labelFieldIds = new Map(schemas.map((schema) => [schema.name, schemaLabelField(schema)]));
   const schemaNotFound =
@@ -181,33 +224,53 @@ export default function ContentPage() {
   }
 
   function goToNextPage() {
-    if (!hasNextPage || pagination.nextCursor == null) return;
-    navigate(
-      buildPageUrl({
-        allView,
-        selected,
+    if (allView) {
+      if (!hasNextPage) return;
+      const nextState = advance(allViewState, allEntriesQuery.nextCursors);
+      navigate(buildAllViewPageUrl({
         conflictedOnly,
-        targetPage: page + 1,
-        pagination: { limit: PAGE_LIMIT, cursor: pagination.nextCursor, direction: "forward" },
+        allviewState: encodeState(nextState),
         sortField: sortFieldRaw,
         sortOrder: sortOrderRaw,
-      }),
-    );
+      }));
+    } else {
+      if (!hasNextPage || pagination.nextCursor == null) return;
+      navigate(
+        buildSingleSchemaPageUrl({
+          selected,
+          conflictedOnly,
+          targetPage: page + 1,
+          pagination: { limit: PAGE_LIMIT, cursor: pagination.nextCursor, direction: "forward" },
+          sortField: sortFieldRaw,
+          sortOrder: sortOrderRaw,
+        }),
+      );
+    }
   }
 
   function goToPrevPage() {
-    if (!hasPrevPage || pagination.prevCursor == null) return;
-    navigate(
-      buildPageUrl({
-        allView,
-        selected,
+    if (allView) {
+      if (!hasPrevPage) return;
+      const prevState = retreat(allViewState, allEntriesQuery.prevCursors);
+      navigate(buildAllViewPageUrl({
         conflictedOnly,
-        targetPage: page - 1,
-        pagination: { limit: PAGE_LIMIT, cursor: pagination.prevCursor, direction: "backward" },
+        allviewState: encodeState(prevState),
         sortField: sortFieldRaw,
         sortOrder: sortOrderRaw,
-      }),
-    );
+      }));
+    } else {
+      if (!hasPrevPage || pagination.prevCursor == null) return;
+      navigate(
+        buildSingleSchemaPageUrl({
+          selected,
+          conflictedOnly,
+          targetPage: page - 1,
+          pagination: { limit: PAGE_LIMIT, cursor: pagination.prevCursor, direction: "backward" },
+          sortField: sortFieldRaw,
+          sortOrder: sortOrderRaw,
+        }),
+      );
+    }
   }
 
   if (schemaNotFound) {
@@ -551,7 +614,7 @@ export default function ContentPage() {
                   />
                 </PaginationItem>
                 <PaginationItem>
-                  <span className="px-3 text-sm text-muted-foreground">Page {page}</span>
+                  <span className="px-3 text-sm text-muted-foreground">Page {displayPage}</span>
                 </PaginationItem>
                 <PaginationItem>
                   <PaginationNext
