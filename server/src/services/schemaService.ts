@@ -627,48 +627,26 @@ export class SchemaService {
     old: FieldWithId,
     newField: FieldWithId
   ): boolean {
-    // R13: non-breaking changes:
-    // - number→text (type change)
-    // - required→optional
-    // - rename label / reorder
+    // R13/R14: evaluate each dimension independently and OR the results.
+    // A compound change (e.g., number/optional → text/required) must not let
+    // one dimension short-circuit another.
 
-    // R14: breaking changes:
-    // - text→number, optional→required
-    // - into/out of boolean, date, schema-ref
-    // - ref target change
+    // Type dimension: breaking if type changed, except number→text (R13).
+    const typeBreaking =
+      old.type !== newField.type &&
+      !(old.type === "number" && newField.type === "text");
 
-    const typeChanged = old.type !== newField.type;
-    const requiredChanged = old.required !== newField.required;
+    // Required dimension: breaking if optional→required (R14).
+    // required→optional is non-breaking (R13).
+    const requiredBreaking = !old.required && newField.required;
 
-    if (typeChanged) {
-      // number→text is non-breaking (R13)
-      if (old.type === "number" && newField.type === "text") {
-        return false;
-      }
-      // Any other type change is breaking (R14)
-      return true;
-    }
-
-    if (requiredChanged) {
-      // required→optional is non-breaking (R13)
-      if (old.required && !newField.required) {
-        return false;
-      }
-      // optional→required is breaking (R14)
-      return true;
-    }
-
-    // ref_schema change for schema-ref fields is breaking (R14)
-    if (
+    // Ref dimension: breaking if both sides are schema-ref and ref_schema changed (R14).
+    const refBreaking =
       old.type === "schema-ref" &&
       newField.type === "schema-ref" &&
-      old.ref_schema !== newField.ref_schema
-    ) {
-      return true;
-    }
+      old.ref_schema !== newField.ref_schema;
 
-    // label rename / reorder are non-breaking (R13)
-    return false;
+    return typeBreaking || requiredBreaking || refBreaking;
   }
 
   /**
@@ -720,36 +698,38 @@ export class SchemaService {
 
       const affectedFieldIds = new Set<number>();
 
-      for (const oldField of existing.fields) {
-        const id = oldField.id;
+        for (const oldField of existing.fields) {
+          const id = oldField.id;
 
-        if (deletedIds.has(id)) {
-          if (hasStoredValue(id)) affectedFieldIds.add(id);
-          continue;
-        }
-
-        const incoming = incomingById.get(id);
-        if (!incoming) continue;
-
-        if (oldField.type === "number" && incoming.type === "text") continue;
-
-        if (oldField.type !== incoming.type) {
-          if (hasStoredValue(id)) affectedFieldIds.add(id);
-          continue;
-        }
-
-        if (retargetedIds.has(id)) {
-          if (refsById.has(id)) affectedFieldIds.add(id);
-          continue;
-        }
-
-        if (!oldField.required && incoming.required) {
-          if (!hasStoredValue(id) || rowsById.get(id) === "") {
-            affectedFieldIds.add(id);
+          if (deletedIds.has(id)) {
+            if (hasStoredValue(id)) affectedFieldIds.add(id);
+            continue;
           }
-          continue;
+
+          const incoming = incomingById.get(id);
+          if (!incoming) continue;
+
+          // Evaluate each dimension independently so compound changes
+          // (e.g., number/optional → text/required) are not short-circuited.
+
+          // Type dimension: any type change other than number→text flags the entry.
+          if (oldField.type !== incoming.type &&
+              !(oldField.type === "number" && incoming.type === "text")) {
+            if (hasStoredValue(id)) affectedFieldIds.add(id);
+          }
+
+          // Retarget dimension: a retargeted field flags entries holding a ref.
+          if (retargetedIds.has(id)) {
+            if (refsById.has(id)) affectedFieldIds.add(id);
+          }
+
+          // Required dimension: optional→required flags entries missing a value.
+          if (!oldField.required && incoming.required) {
+            if (!hasStoredValue(id) || rowsById.get(id) === "") {
+              affectedFieldIds.add(id);
+            }
+          }
         }
-      }
 
       // hasNewRequiredField entries have no specific field to report
       if (!hasNewRequiredField && affectedFieldIds.size === 0) continue;
