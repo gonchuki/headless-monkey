@@ -288,8 +288,20 @@ export class SchemaService {
     const isBreaking = this.computeBreakingChange(existing.fields, fields);
     const compatVersion = isBreaking ? newVersion : existing.compat_version;
 
-    // Determine deleted field IDs for propagation (R21)
+    // Reject foreign field ids: an incoming field carrying a numeric id that
+    // is not one of the target schema's existing field ids would corrupt
+    // another schema's rows (the repository update is scoped only by field id).
     const existingIds = new Set(existing.fields.map((f) => f.id));
+    for (const f of fields) {
+      if ("id" in f && typeof f.id === "number" && !existingIds.has(f.id)) {
+        throw new SchemaServiceError(
+          422,
+          `Field id ${f.id} does not belong to schema '${name}'`
+        );
+      }
+    }
+
+    // Determine deleted field IDs for propagation (R21)
     const incomingIds = new Set<number>();
     for (const f of fields) {
       if ("id" in f && typeof f.id === "number") {
