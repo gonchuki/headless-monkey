@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { ArrowDown, ArrowUp, ArrowLeft, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
@@ -30,6 +30,7 @@ import type { ContentListEntry, PaginationResponse } from "@/lib/api";
 import { entryLabel, schemaLabelField } from "@/lib/entries";
 import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
+import { dropSortParams, isStaleSortError } from "@/lib/sortRecovery";
 import { SchemaBadge } from "@/components/shared/SchemaBadge";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -177,6 +178,22 @@ export default function ContentPage() {
     entriesError = filtered.error;
     entriesRefetch = filtered.refetch;
   }
+
+  // ---- Stale sort recovery effect ----
+  // When the listing query errors with a stale-sort message and the URL carries
+  // sort params, rewrite the URL to drop them. After the rewrite the params are
+  // gone so the guard fails and the effect cannot navigate again (loop-safe).
+  useEffect(() => {
+    if (!entriesIsError) return;
+    if (!isStaleSortError(entriesError)) return;
+
+    const cleaned = dropSortParams(searchParams);
+    if (cleaned == null) return; // no sort params to drop
+
+    const qs = cleaned.toString();
+    const base = allView ? "/content" : `/content/${encodeURIComponent(selected ?? "")}`;
+    navigate(qs ? `${base}?${qs}` : base, { replace: true });
+  }, [entriesIsError, entriesError, searchParams, allView, selected, navigate]);
 
   const visibleEntries = conflictedOnly ? entries.filter((entry) => entry.conflict) : entries;
 
