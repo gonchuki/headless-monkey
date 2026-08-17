@@ -86,7 +86,7 @@ export function SchemaSaveConfirmDialog({
 
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction disabled={previewPending || savePending} onClick={onConfirm}>
+          <AlertDialogAction disabled={previewPending || previewError != null || savePending} onClick={onConfirm}>
             {savePending ? "Saving…" : "Save changes"}
           </AlertDialogAction>
         </AlertDialogFooter>
