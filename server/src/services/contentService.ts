@@ -145,6 +145,16 @@ export class ContentService {
     return { id: existing.record.id, schema: existing.record.schema };
   }
 
+  /** Returns a single entry in the editor shape (field_id-keyed values, raw schema-ref ids). */
+  getEditorEntry(entryId: number): ContentListEntry {
+    const entry = this.repo.getEntry(entryId);
+    if (!entry) {
+      throw new ContentServiceError(404, `Entry ${entryId} not found`);
+    }
+    const schema = this.requireSchema(entry.record.schema);
+    return this.toEntry(entry, schema, true, "editor");
+  }
+
   countForSchema(schemaName: string): number {
     this.requireSchema(schemaName);
     return this.repo.countBySchema(schemaName);

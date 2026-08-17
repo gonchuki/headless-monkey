@@ -6,9 +6,9 @@ import { PageSkeleton } from "@/components/shared/PageSkeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
-import { useEntries } from "@/hooks/useEntries";
+import { useUpdateEntry } from "@/hooks/useEntryMutations";
 import { useRealtime } from "@/hooks/useRealtime";
-import { apiFetch, type SchemaEntry } from "@/lib/api";
+import { apiFetch, type ContentListEntry, type SchemaEntry } from "@/lib/api";
 import { deriveInitialValues } from "@/lib/entries";
 import { queryKeys } from "@/lib/query";
 
@@ -28,13 +28,18 @@ export default function ContentEditorPage() {
     queryFn: () => apiFetch<SchemaEntry>(`/api/schemas/${encodeURIComponent(schemaName)}`),
   });
 
-  const { entries: entriesList, isPending: entriesPending, update } = useEntries(schemaName);
+  // Single-entry query replaces the full-list fetch + .find()
+  const entryQuery = useQuery<ContentListEntry>({
+    queryKey: queryKeys.entry(schemaName, entryId),
+    queryFn: () => apiFetch<ContentListEntry>(`/api/entries/${entryId}`),
+    enabled: schemaName.length > 0 && !Number.isNaN(entryId) && entryId > 0,
+  });
 
   // Live stream: both schema and entry events affect the open entry.
   const { deletedSchemas } = useRealtime({ schemas: [schemaName] });
   const schemaDeleted = deletedSchemas.has(schemaName);
 
-  if (schemaQuery.isPending || entriesPending) {
+  if (schemaQuery.isPending || entryQuery.isPending) {
     return <PageSkeleton />;
   }
 
@@ -56,8 +61,9 @@ export default function ContentEditorPage() {
     );
   }
 
-  const entry = entriesList.find((candidate) => candidate.id === entryId);
-  if (!entry) {
+  // Hand-crafted URL mismatch: entry belongs to a different schema → not found.
+  const entry = entryQuery.data;
+  if (!entry || entry.schema !== schemaName) {
     return (
       <div className="mx-auto max-w-3xl space-y-6">
         <div className="flex items-center gap-3">
@@ -79,6 +85,8 @@ export default function ContentEditorPage() {
   const targetEntry = entry;
   const initialValues = deriveInitialValues(schema, targetEntry);
   const loadKey = `${targetEntry.id}:${targetEntry.conflict}:${targetEntry.schema_version}:${targetEntry.last_modified_date}`;
+
+  const update = useUpdateEntry();
 
   function handleSubmit(values: EntryValues) {
     update.mutate(

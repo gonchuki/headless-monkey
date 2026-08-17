@@ -29,8 +29,6 @@ export interface UseEntriesResult {
   error: unknown;
   refetch: () => Promise<void>;
   create: ReturnType<typeof useMutation<ContentEntry, Error, { schema: string; values: EntryValues }>>;
-  update: ReturnType<typeof useMutation<ContentEntry, Error, { id: number; values: EntryValues }>>;
-  remove: ReturnType<typeof useMutation<void, Error, number>>;
 }
 
 export function useEntries(
@@ -93,69 +91,6 @@ export function useEntries(
     },
   });
 
-  const update = useMutation({
-    mutationFn: ({ id, values }: { id: number; values: EntryValues }) =>
-      apiFetch<ContentEntry>(`/api/entries/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ values }),
-      }),
-    onMutate: async ({ id, values }) => {
-      await queryClient.cancelQueries({ queryKey: key });
-      const previous = queryClient.getQueryData(key);
-      if (pagination) {
-        queryClient.setQueryData<PaginatedEntries>(key, (old) =>
-          old
-            ? {
-                ...old,
-                entries: old.entries.map((entry) =>
-                  entry.id === id ? { ...entry, values: values as Record<string, ContentValue> } : entry,
-                ),
-              }
-            : old,
-        );
-      } else {
-        queryClient.setQueryData<ContentListEntry[]>(key, (old) =>
-          (old ?? []).map((entry) =>
-            entry.id === id ? { ...entry, values: values as Record<string, ContentValue> } : entry,
-          ),
-        );
-      }
-      return { previous };
-    },
-    onError: (_error, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(key, context.previous);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.entries(schemaName) });
-    },
-  });
-
-  const remove = useMutation({
-    mutationFn: (id: number) => apiFetch<void>(`/api/entries/${id}`, { method: "DELETE" }),
-    onMutate: async (id) => {
-      await queryClient.cancelQueries({ queryKey: key });
-      const previous = queryClient.getQueryData(key);
-      if (pagination) {
-        queryClient.setQueryData<PaginatedEntries>(key, (old) =>
-          old ? { ...old, entries: old.entries.filter((entry) => entry.id !== id) } : old,
-        );
-      } else {
-        queryClient.setQueryData<ContentListEntry[]>(key, (old) => (old ?? []).filter((entry) => entry.id !== id));
-      }
-      return { previous };
-    },
-    onError: (_error, _id, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(key, context.previous);
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.entries(schemaName) });
-    },
-  });
-
   return {
     entries,
     pagination: paginationResponse,
@@ -164,7 +99,5 @@ export function useEntries(
     error: query.error,
     refetch: async () => { await query.refetch(); },
     create,
-    update,
-    remove,
   };
 }
