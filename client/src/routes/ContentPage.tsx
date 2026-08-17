@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
+import { useDeleteEntry } from "@/hooks/useEntryMutations";
 import { useAllEntries } from "@/hooks/useAllEntries";
 import { useEntries } from "@/hooks/useEntries";
 import type { PaginationParams, SortParams } from "@/hooks/useEntries";
@@ -141,8 +142,7 @@ export default function ContentPage() {
   const listUrl = buildListUrl({ allView, selected, conflictedOnly, sortField: sortFieldRaw, sortOrder: sortOrderRaw });
 
   // The delete mutation is always keyed to the deleted entry's own schema
-  const deleteSource = useEntries(entryToDelete?.schema ?? "");
-  const remove = deleteSource.remove;
+  const remove = useDeleteEntry();
 
   // Filtered view: always pass pagination params (undefined on first page = non-paginated)
   const filtered = useEntries(selected ?? "", true, paginationParams, allView ? undefined : sort, conflictedOnly);
@@ -228,7 +228,7 @@ export default function ContentPage() {
 
   function handleDeleteConfirm() {
     if (!entryToDelete) return;
-    remove.mutate(entryToDelete.id, {
+    remove.mutate({ id: entryToDelete.id, schema: entryToDelete.schema }, {
       onSuccess: () => {
         setEntryToDelete(null);
         toast.add({ type: "success", title: "Entry deleted" });
@@ -649,7 +649,6 @@ export default function ContentPage() {
         onOpenChange={(open) => {
           if (!open) {
             setEntryToDelete(null);
-            remove.reset();
           }
         }}
         title="Delete entry?"

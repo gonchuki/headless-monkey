@@ -274,6 +274,7 @@ describe("Public content API (R18-R20)", () => {
       const { app } = createTestApp();
       expect((await request(app).get("/api/schemas/car/entries")).status).toBe(401);
       expect((await request(app).post("/api/schemas/car/entries")).status).toBe(401);
+      expect((await request(app).get("/api/entries/1")).status).toBe(401);
       expect((await request(app).patch("/api/entries/1")).status).toBe(401);
       expect((await request(app).delete("/api/entries/1")).status).toBe(401);
     });
@@ -283,8 +284,127 @@ describe("Public content API (R18-R20)", () => {
       const auth = { Authorization: `Bearer ${adminToken()}` };
       expect((await request(app).get("/api/schemas/car/entries").set(auth)).status).toBe(403);
       expect((await request(app).post("/api/schemas/car/entries").set(auth)).status).toBe(403);
+      expect((await request(app).get("/api/entries/1").set(auth)).status).toBe(403);
       expect((await request(app).patch("/api/entries/1").set(auth)).status).toBe(403);
       expect((await request(app).delete("/api/entries/1").set(auth)).status).toBe(403);
+    });
+  });
+
+  describe("GET /api/entries/:id (single-entry editor route)", () => {
+    it("returns 200 with editor shape for an existing entry", async () => {
+      const { app, schemaService } = createTestApp();
+      const car = makeCarSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const yearField = car.fields.find((f) => f.label === "year")!;
+      const token = editorToken();
+
+      const created = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(makeField.id)]: "Civic", [String(yearField.id)]: 2019 } });
+      expect(created.status).toBe(201);
+
+      const res = await request(app)
+        .get(`/api/entries/${created.body.id}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(created.body.id);
+      expect(res.body.schema).toBe("car");
+      // values keyed by String(field_id)
+      expect(res.body.values[String(makeField.id)]).toBe("Civic");
+      expect(res.body.values[String(yearField.id)]).toBe(2019);
+      // conflict and referencer_count present
+      expect(res.body.conflict).toBe(false);
+      expect(typeof res.body.referencer_count).toBe("number");
+    });
+
+    it("returns 404 for an unknown id", async () => {
+      const { app } = createTestApp();
+      const res = await request(app)
+        .get("/api/entries/99999")
+        .set("Authorization", `Bearer ${editorToken()}`);
+      expect(res.status).toBe(404);
+    });
+
+    it("returns 200 with conflict: true for a conflicted entry (not 422)", async () => {
+      const { app, schemaService } = createTestApp();
+      const car = makeCarSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const token = editorToken();
+
+      const created = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(makeField.id)]: "Civic" } });
+      expect(created.status).toBe(201);
+
+      // Breaking change: add a required field
+      await request(app)
+        .patch("/api/schemas/car")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          fields: [
+            { id: makeField.id, label: "make", type: "text", required: true },
+            { label: "vin", type: "text", required: true },
+          ],
+        });
+
+      // Single-entry route returns 200 with conflict: true (editor is the repair surface)
+      const res = await request(app)
+        .get(`/api/entries/${created.body.id}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.conflict).toBe(true);
+    });
+
+    it("enriches schema-ref values as raw target ids in editor shape", async () => {
+      const { app, schemaService } = createTestApp();
+      schemaService.create(
+        "person",
+        [{ label: "name", type: "text", required: true }],
+        "editor1"
+      );
+      const car = schemaService.create(
+        "car",
+        [
+          { label: "make", type: "text", required: true },
+          { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
+        ],
+        "editor1"
+      );
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const token = editorToken();
+
+      const person = await request(app)
+        .post("/api/schemas/person/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { "1": "Alice" } });
+      expect(person.status).toBe(201);
+
+      const created = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          values: {
+            [String(makeField.id)]: "Civic",
+            [String(ownerField.id)]: person.body.id,
+          },
+        });
+      expect(created.status).toBe(201);
+
+      const res = await request(app)
+        .get(`/api/entries/${created.body.id}`)
+        .set("Authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      // schema-ref value is the raw target id (not enriched {id, schema})
+      expect(res.body.values[String(ownerField.id)]).toBe(person.body.id);
+    });
+
+    it("auth guards: 401 without token, 403 for admin", async () => {
+      const { app } = createTestApp();
+      expect((await request(app).get("/api/entries/1")).status).toBe(401);
+      expect((await request(app).get("/api/entries/1").set({ Authorization: `Bearer ${adminToken()}` })).status).toBe(403);
     });
   });
 

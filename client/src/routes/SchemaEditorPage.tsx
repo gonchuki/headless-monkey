@@ -14,7 +14,6 @@ import { toast } from "@/components/ui/toast";
 import { useEntries } from "@/hooks/useEntries";
 import { useRealtime } from "@/hooks/useRealtime";
 import {
-  useSchemaEntryCount,
   useSchemaPatchPreview,
   useSchemas,
   type SchemaDraft,
@@ -212,7 +211,6 @@ export default function SchemaEditorPage() {
   const tombstonedFields = state.fields.filter((field) => field.deleted);
   const hasTombstones = tombstonedFields.length > 0;
 
-  const entryCountQuery = useSchemaEntryCount(entriesSchemaName, hasTombstones && !deleted);
   const { entries: entriesList, isPending: entriesPending } = useEntries(entriesSchemaName, hasTombstones && !deleted);
 
   const saveBlockReason =
@@ -379,7 +377,7 @@ export default function SchemaEditorPage() {
       {!isCreate && !deleted && hasTombstones && (
         <PendingDeletionBanner
           deletedFields={tombstonedFields}
-          entryCount={entryCountQuery.data}
+          entryCount={entriesPending ? undefined : entriesList.length}
           entries={entriesList}
           entriesPending={entriesPending}
           blockReason={saveBlockReason}

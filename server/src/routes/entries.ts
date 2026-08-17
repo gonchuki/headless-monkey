@@ -78,7 +78,17 @@ export function createEntriesRouter(
     }
   });
 
-  // Mounted at /api/entries
+  // Mounted at /api/entries (and /api/schemas/:name/entries — harmless overlap)
+  router.get("/:id", validateNumericParam("id"), (req: Request, res: Response) => {
+    try {
+      const id = Number.parseInt(req.params.id as string, 10);
+      const entry = contentService.getEditorEntry(id);
+      res.json(entry);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   router.patch("/:id", validateNumericParam("id"), (req: Request, res: Response) => {
     try {
       const id = Number.parseInt(req.params.id as string, 10);
