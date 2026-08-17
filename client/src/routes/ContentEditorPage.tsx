@@ -78,7 +78,7 @@ export default function ContentEditorPage() {
 
   const targetEntry = entry;
   const initialValues = deriveInitialValues(schema, targetEntry);
-  const loadKey = `${targetEntry.id}:${targetEntry.conflict}:${targetEntry.schema_version}`;
+  const loadKey = `${targetEntry.id}:${targetEntry.conflict}:${targetEntry.schema_version}:${targetEntry.last_modified_date}`;
 
   function handleSubmit(values: EntryValues) {
     update.mutate(
