@@ -4,6 +4,7 @@ import {
   type EntryCountResponse,
   type FieldType,
   type SchemaEntry,
+  type SchemaField,
   type SchemaFieldInput,
   type SchemaUpdatePreview,
 } from "@/lib/api";
@@ -33,9 +34,23 @@ export function useSchemas() {
         method: "POST",
         body: JSON.stringify({ name: input.name, fields: input.fields }),
       }),
-    onMutate: async () => {
+    onMutate: async (input) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.schemas() });
       const previous = queryClient.getQueryData<SchemaEntry[]>(queryKeys.schemas());
+      const now = new Date().toISOString();
+      const optimisticSchema: SchemaEntry = {
+        name: input.name,
+        fields: input.fields.map((f, i) => ({ ...f, id: -(i + 1), sort_order: i })) as SchemaField[],
+        version: 1,
+        compat_version: 1,
+        creation_date: now,
+        created_by: "you",
+        last_modified_date: now,
+        last_modified_by: "you",
+      };
+      queryClient.setQueryData<SchemaEntry[]>(queryKeys.schemas(), (old) =>
+        [...(old ?? []), optimisticSchema],
+      );
       return { previous };
     },
     onError: (_error, _vars, context) => {
