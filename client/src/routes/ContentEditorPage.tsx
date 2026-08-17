@@ -39,6 +39,8 @@ export default function ContentEditorPage() {
   const { deletedSchemas } = useRealtime({ schemas: [schemaName] });
   const schemaDeleted = deletedSchemas.has(schemaName);
 
+  const update = useUpdateEntry();
+
   if (schemaQuery.isPending || entryQuery.isPending) {
     return <PageSkeleton />;
   }
@@ -85,8 +87,6 @@ export default function ContentEditorPage() {
   const targetEntry = entry;
   const initialValues = deriveInitialValues(schema, targetEntry);
   const loadKey = `${targetEntry.id}:${targetEntry.conflict}:${targetEntry.schema_version}:${targetEntry.last_modified_date}`;
-
-  const update = useUpdateEntry();
 
   function handleSubmit(values: EntryValues) {
     update.mutate(
