@@ -1,8 +1,9 @@
 import { useQueries } from "@tanstack/react-query";
-import { apiFetch, type ContentListEntry, type PaginationResponse } from "@/lib/api";
+import { apiFetch, type ContentListEntry } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
-import { mergeAllEntriesPages } from "@/lib/allEntriesMerge";
-import type { PaginationParams, SortParams, PaginatedEntries } from "@/hooks/useEntries";
+import type { PaginatedEntries } from "@/hooks/useEntries";
+import { isStuck } from "@/lib/allViewPagination";
+import type { AllViewState } from "@/lib/allViewPagination";
 
 export interface AllEntriesQuery {
   data: ContentListEntry[];
@@ -11,30 +12,43 @@ export interface AllEntriesQuery {
   isSuccess: boolean;
   error: unknown;
   refetch: () => Promise<void>;
-  pagination: PaginationResponse;
+  /** Per-schema next cursors from live responses (for transition computation). */
+  nextCursors: Record<string, string | null>;
+  /** Per-schema prev cursors from live responses (for transition computation). */
+  prevCursors: Record<string, string | null>;
 }
 
-export function useAllEntries(schemaNames: string[], pagination?: PaginationParams, sort?: SortParams): AllEntriesQuery {
+export function useAllEntries(
+  schemaNames: string[],
+  state: AllViewState,
+  limit: number,
+): AllEntriesQuery {
   const schemas = [...new Set(schemaNames.filter((name) => name.length > 0))];
 
+  // Build query configs only for visible (non-stuck) schemas
+  const visibleSchemas = schemas.filter((schema) => !isStuck(state, schema));
+
+  const queryConfigs = visibleSchemas.map((schema) => {
+    const schemaState = state.schemas[schema];
+    const cursor = schemaState?.cursor;
+    const direction = schemaState?.direction;
+    return { schema, cursor, direction };
+  });
+
   const queries = useQueries({
-    queries: schemas.map((schema) => ({
-      queryKey: pagination
-        ? [...queryKeys.entries(schema), { pagination }, { sort }] as const
-        : queryKeys.entries(schema),
+    queries: queryConfigs.map(({ schema, cursor, direction }) => ({
+      queryKey: [
+        ...queryKeys.entries(schema),
+        { allView: true, cursor, direction },
+      ] as const,
       queryFn: () => {
         const params = new URLSearchParams();
-        if (pagination?.limit != null) params.set("limit", String(pagination.limit));
-        if (pagination?.cursor != null) params.set("cursor", String(pagination.cursor));
-        if (pagination?.direction) params.set("direction", pagination.direction);
-        if (sort?.sortField) params.set("sort_field", sort.sortField);
-        if (sort?.sortOrder) params.set("sort_order", sort.sortOrder);
+        params.set("limit", String(limit));
+        if (cursor != null) params.set("cursor", cursor);
+        if (direction) params.set("direction", direction);
         const qs = params.toString();
         const url = `/api/schemas/${encodeURIComponent(schema)}/entries${qs ? `?${qs}` : ""}`;
-        if (pagination) {
-          return apiFetch<PaginatedEntries>(url);
-        }
-        return apiFetch<ContentListEntry[]>(url);
+        return apiFetch<PaginatedEntries>(url);
       },
       enabled: schema.length > 0,
     })),
@@ -48,23 +62,29 @@ export function useAllEntries(schemaNames: string[], pagination?: PaginationPara
   const isPending = !isError && anyPending && !anySuccess;
   const isSuccess = !isError && !isPending;
 
-  const pages = queries.map((query) => {
-    if (pagination) {
-      const paginated = query.data as PaginatedEntries | undefined;
-      return {
-        entries: paginated?.entries ?? [],
-        pagination: paginated?.pagination,
-      };
-    }
-    return {
-      entries: (query.data as ContentListEntry[] | undefined) ?? [],
-      pagination: undefined,
-    };
-  });
+  // Extract per-schema cursors from live responses and collect entries
+  const nextCursors: Record<string, string | null> = {};
+  const prevCursors: Record<string, string | null> = {};
+  const entries: ContentListEntry[] = [];
 
-  const { data, pagination: mergedPagination } = mergeAllEntriesPages(
-    pages,
-    pagination != null,
+  for (let i = 0; i < queryConfigs.length; i++) {
+    const schema = queryConfigs[i].schema;
+    const paginated = queries[i].data as PaginatedEntries | undefined;
+    if (paginated) {
+      entries.push(...paginated.entries);
+      nextCursors[schema] = paginated.pagination.nextCursor;
+      prevCursors[schema] = paginated.pagination.prevCursor;
+    }
+  }
+
+  // Sort by last_modified_date descending (existing behavior)
+  const data = entries.sort(
+    (a, b) =>
+      a.last_modified_date < b.last_modified_date
+        ? 1
+        : a.last_modified_date > b.last_modified_date
+          ? -1
+          : 0,
   );
 
   return {
@@ -76,6 +96,7 @@ export function useAllEntries(schemaNames: string[], pagination?: PaginationPara
     refetch: async () => {
       await Promise.all(queries.map((query) => query.refetch()));
     },
-    pagination: mergedPagination,
+    nextCursors,
+    prevCursors,
   };
 }
