@@ -873,6 +873,185 @@ describe("ContentService", () => {
       expect(publicResult.entries[0].id).toBe(e1.id);
       expect(publicResult.pagination.nextCursor).toBeNull();
     });
+
+    it("SQL filter: 4 valid interleaved with 3 conflicted returns full page (regression)", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      // Create 7 entries (ids will be assigned sequentially)
+      const entries: { id: number }[] = [];
+      for (let i = 0; i < 7; i++) {
+        entries.push(contentService.create("car", { "1": `Car${i}` }, "editor1"));
+      }
+
+      // Breaking schema update: adds required field, making all entries conflicted
+      schemaService.update(
+        "car",
+        [
+          { id: 1, label: "make", type: "text", required: true },
+          { label: "vin", type: "text", required: true },
+        ],
+        "editor1"
+      );
+
+      // Update even-indexed entries (2nd, 4th, 6th, 7th = indices 1,3,5,6) to resolve conflicts
+      // This gives us valid entries at positions 2,4,6,7 and conflicted at 1,3,5
+      const validEntries = [entries[1], entries[3], entries[5], entries[6]];
+      for (const e of validEntries) {
+        contentService.update(e.id, { "2": "VIN" }, "editor1");
+      }
+
+      // listPublic with id asc should return exactly the 4 valid ids in ascending order
+      const result = contentService.listPublic(
+        "car",
+        { limit: 5 },
+        { sortField: "id", sortOrder: "asc" }
+      );
+
+      expect(result.entries.map((e) => e.id)).toEqual(validEntries.map((e) => e.id));
+      expect(result.pagination.nextCursor).toBeNull();
+    });
+
+    it("SQL filter: page fullness + walk with 6 valid interleaved with 5 conflicted", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      // Create 11 entries
+      const entries: { id: number }[] = [];
+      for (let i = 0; i < 11; i++) {
+        entries.push(contentService.create("car", { "1": `Car${i}` }, "editor1"));
+      }
+
+      // Breaking schema update
+      schemaService.update(
+        "car",
+        [
+          { id: 1, label: "make", type: "text", required: true },
+          { label: "vin", type: "text", required: true },
+        ],
+        "editor1"
+      );
+
+      // Resolve even-indexed entries (indices 1,3,5,7,9,10) = 6 valid
+      // Conflicted at indices 0,2,4,6,8 = 5 conflicted
+      const validEntries = [entries[1], entries[3], entries[5], entries[7], entries[9], entries[10]];
+      for (const e of validEntries) {
+        contentService.update(e.id, { "2": "VIN" }, "editor1");
+      }
+
+      const sort = { sortField: "id", sortOrder: "asc" };
+
+      // Page 1: first 5 valid ids
+      const page1 = contentService.listPublic("car", { limit: 5 }, sort);
+      expect(page1.entries.map((e) => e.id)).toEqual(validEntries.slice(0, 5).map((e) => e.id));
+      expect(page1.pagination.nextCursor).not.toBeNull();
+      expect(page1.pagination.prevCursor).toBeNull();
+
+      // Page 2: remaining valid id
+      const page2 = contentService.listPublic("car", { limit: 5, cursor: page1.pagination.nextCursor! }, sort);
+      expect(page2.entries.map((e) => e.id)).toEqual(validEntries.slice(5).map((e) => e.id));
+      expect(page2.pagination.nextCursor).toBeNull();
+      expect(page2.pagination.prevCursor).not.toBeNull();
+
+      // No conflicted id appears in any page
+      const allIds = [...page1.entries, ...page2.entries].map((e) => e.id);
+      const conflictedEntries = entries.filter((_, i) => ![1, 3, 5, 7, 9, 10].includes(i));
+      for (const ce of conflictedEntries) {
+        expect(allIds).not.toContain(ce.id);
+      }
+    });
+
+    it("SQL filter: all entries conflicted returns empty with null cursors", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      for (let i = 0; i < 5; i++) {
+        contentService.create("car", { "1": `Car${i}` }, "editor1");
+      }
+
+      // Breaking schema update makes all entries conflicted
+      schemaService.update(
+        "car",
+        [
+          { id: 1, label: "make", type: "text", required: true },
+          { label: "vin", type: "text", required: true },
+        ],
+        "editor1"
+      );
+
+      const result = contentService.listPublic(
+        "car",
+        { limit: 10 },
+        { sortField: "id", sortOrder: "asc" }
+      );
+
+      expect(result.entries).toEqual([]);
+      expect(result.pagination.nextCursor).toBeNull();
+      expect(result.pagination.prevCursor).toBeNull();
+    });
+
+    it("SQL filter: editor path (listForSchema) still returns conflicted entries", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      // Create 7 entries
+      const entries: { id: number }[] = [];
+      for (let i = 0; i < 7; i++) {
+        entries.push(contentService.create("car", { "1": `Car${i}` }, "editor1"));
+      }
+
+      // Breaking schema update
+      schemaService.update(
+        "car",
+        [
+          { id: 1, label: "make", type: "text", required: true },
+          { label: "vin", type: "text", required: true },
+        ],
+        "editor1"
+      );
+
+      // Resolve some entries
+      const validEntries = [entries[1], entries[3], entries[5], entries[6]];
+      for (const e of validEntries) {
+        contentService.update(e.id, { "2": "VIN" }, "editor1");
+      }
+
+      // listForSchema should return all entries including conflicted ones
+      const result = contentService.listForSchema(
+        "car",
+        { limit: 5 },
+        { sortField: "id", sortOrder: "asc" }
+      );
+
+      expect(result.entries).toHaveLength(5);
+      expect(result.pagination.nextCursor).not.toBeNull();
+
+      // Page 1 (ids asc, limit 5) has entries[0..4] by creation order.
+      // Among those: indices 1,3 are valid; indices 0,2,4 are conflicted.
+      const conflicts = new Map(result.entries.map((e) => [e.id, e.conflict]));
+
+      // Valid entries that appear on this page should have conflict=false
+      for (const ve of validEntries) {
+        if (conflicts.has(ve.id)) {
+          expect(conflicts.get(ve.id)).toBe(false);
+        }
+      }
+      // Conflicted entries that appear on this page should have conflict=true
+      const conflictedEntries = entries.filter((_, i) => ![1, 3, 5, 6].includes(i));
+      for (const ce of conflictedEntries) {
+        if (conflicts.has(ce.id)) {
+          expect(conflicts.get(ce.id)).toBe(true);
+        }
+      }
+    });
   });
 
   describe("sorting", () => {

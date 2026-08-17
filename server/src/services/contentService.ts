@@ -235,17 +235,14 @@ export class ContentService {
     }
 
     if (pagination !== undefined) {
-      const result = this.repo.listEntriesPaginated(schemaName, pagination, resolvedSort);
+      const result = this.repo.listEntriesPaginated(schemaName, pagination, resolvedSort, schema.compat_version);
       return {
-        entries: result.entries
-          .filter((entry) => entry.record.schema_version >= schema.compat_version)
-          .map((entry) => this.toEntry(entry, schema, false)),
+        entries: result.entries.map((entry) => this.toEntry(entry, schema, false)),
         pagination: result.pagination,
       };
     }
     return this.repo
-      .listEntries(schemaName, resolvedSort)
-      .filter((entry) => entry.record.schema_version >= schema.compat_version)
+      .listEntries(schemaName, resolvedSort, schema.compat_version)
       .map((entry) => this.toEntry(entry, schema, false));
   }
 

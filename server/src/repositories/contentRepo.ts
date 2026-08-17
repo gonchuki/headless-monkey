@@ -157,16 +157,23 @@ export class ContentRepository {
     return { record, rows, refs };
   }
 
-  listEntries(schema: string, sort?: ResolvedSortParams): ContentEntryRow[] {
+  listEntries(
+    schema: string,
+    sort?: ResolvedSortParams,
+    minVersion?: number
+  ): ContentEntryRow[] {
     const resolvedSort = sort ?? { sortField: "modified", sortOrder: "desc" };
     const orderClause = this.buildOrderClause(resolvedSort);
     const joinClause = this.buildJoinClause(resolvedSort);
 
+    const versionFilter = minVersion !== undefined ? " AND content.schema_version >= ?" : "";
+    const versionParams: number[] = minVersion !== undefined ? [minVersion] : [];
+
     const records = this.db
       .prepare(
-        `SELECT content.id, content.schema, content.schema_version, content.creation_date, content.created_by, content.last_modified_date, content.last_modified_by, (SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count FROM content${joinClause} WHERE content.schema = ? ${orderClause}`
+        `SELECT content.id, content.schema, content.schema_version, content.creation_date, content.created_by, content.last_modified_date, content.last_modified_by, (SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count FROM content${joinClause} WHERE content.schema = ?${versionFilter} ${orderClause}`
       )
-      .all(schema) as ContentRecord[];
+      .all(schema, ...versionParams) as ContentRecord[];
 
     if (records.length === 0) return [];
 
@@ -220,7 +227,8 @@ export class ContentRepository {
   listEntriesPaginated(
     schema: string,
     pagination: PaginationParams,
-    sort?: ResolvedSortParams
+    sort?: ResolvedSortParams,
+    minVersion?: number
   ): { entries: ContentEntryRow[]; pagination: PaginationResponse } {
     const limit = clampLimit(pagination.limit);
     const direction = pagination.direction === "backward" ? "backward" : "forward";
@@ -254,6 +262,9 @@ export class ContentRepository {
     let records: PageRecord[];
     let hasMore = false;
 
+    const versionFilter = minVersion !== undefined ? " AND content.schema_version >= ?" : "";
+    const versionParams: number[] = minVersion !== undefined ? [minVersion] : [];
+
     if (anchor !== null && direction === "backward") {
       // Backward: fetch entries "before" the anchor in display order, using
       // the exact reverse of the display ORDER BY, then reverse to restore
@@ -262,8 +273,8 @@ export class ContentRepository {
       const cond = this.buildKeysetCondition(col, resolvedSort, "backward", anchor);
       const reverseOrder = this.buildOrderClause(resolvedSort, true);
       records = this.db
-        .prepare(`${SELECT} WHERE content.schema = ? AND ${cond.sql} ${reverseOrder} LIMIT ?`)
-        .all(schema, ...cond.params, limit + 1) as PageRecord[];
+        .prepare(`${SELECT} WHERE content.schema = ?${versionFilter} AND ${cond.sql} ${reverseOrder} LIMIT ?`)
+        .all(schema, ...versionParams, ...cond.params, limit + 1) as PageRecord[];
       hasMore = records.length > limit;
       if (hasMore) records.pop(); // remove the extra probe row
       records.reverse(); // restore display order
@@ -271,14 +282,14 @@ export class ContentRepository {
       // Forward: fetch entries "after" the anchor in display order.
       const cond = this.buildKeysetCondition(col, resolvedSort, "forward", anchor);
       records = this.db
-        .prepare(`${SELECT} WHERE content.schema = ? AND ${cond.sql} ${orderClause} LIMIT ?`)
-        .all(schema, ...cond.params, limit + 1) as PageRecord[];
+        .prepare(`${SELECT} WHERE content.schema = ?${versionFilter} AND ${cond.sql} ${orderClause} LIMIT ?`)
+        .all(schema, ...versionParams, ...cond.params, limit + 1) as PageRecord[];
       hasMore = records.length > limit;
       if (hasMore) records.pop(); // remove the extra probe row
     } else {
       records = this.db
-        .prepare(`${SELECT} WHERE content.schema = ? ${orderClause} LIMIT ?`)
-        .all(schema, limit + 1) as PageRecord[];
+        .prepare(`${SELECT} WHERE content.schema = ?${versionFilter} ${orderClause} LIMIT ?`)
+        .all(schema, ...versionParams, limit + 1) as PageRecord[];
       hasMore = records.length > limit;
       if (hasMore) records.pop(); // remove the extra probe row
     }
@@ -329,10 +340,10 @@ export class ContentRepository {
     const lastAnchor = this.anchorOf(records[records.length - 1], resolvedSort);
     const nextExists =
       direction === "backward"
-        ? this.keysetExists(col, resolvedSort, "forward", lastAnchor, schema)
+        ? this.keysetExists(col, resolvedSort, "forward", lastAnchor, schema, minVersion)
         : hasMore;
     const prevExists =
-      anchor !== null && this.keysetExists(col, resolvedSort, "backward", firstAnchor, schema);
+      anchor !== null && this.keysetExists(col, resolvedSort, "backward", firstAnchor, schema, minVersion);
 
     const paginationResult: PaginationResponse = {
       nextCursor: nextExists ? encodeCursor(lastAnchor.value, lastAnchor.id) : null,
@@ -505,14 +516,17 @@ export class ContentRepository {
     sort: ResolvedSortParams,
     direction: "forward" | "backward",
     anchor: DecodedCursor,
-    schema: string
+    schema: string,
+    minVersion?: number
   ): boolean {
     const cond = this.buildKeysetCondition(col, sort, direction, anchor);
+    const versionFilter = minVersion !== undefined ? " AND content.schema_version >= ?" : "";
+    const versionParams: number[] = minVersion !== undefined ? [minVersion] : [];
     const row = this.db
       .prepare(
-        `SELECT 1 FROM content${this.buildJoinClause(sort)} WHERE content.schema = ? AND ${cond.sql} LIMIT 1`
+        `SELECT 1 FROM content${this.buildJoinClause(sort)} WHERE content.schema = ?${versionFilter} AND ${cond.sql} LIMIT 1`
       )
-      .get(schema, ...cond.params);
+      .get(schema, ...versionParams, ...cond.params);
     return row !== undefined;
   }
 
