@@ -1525,4 +1525,48 @@ describe("ContentService", () => {
       expect(result.pagination.prevCursor).toBeNull();
     });
   });
+
+  describe("countForSchema", () => {
+    it("returns 0 for empty schema", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      expect(contentService.countForSchema("car")).toBe(0);
+    });
+
+    it("returns correct count after inserts", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      contentService.create("car", { "1": "Civic" }, "editor1");
+      contentService.create("car", { "1": "Accord" }, "editor1");
+      contentService.create("car", { "1": "BMW" }, "editor1");
+
+      expect(contentService.countForSchema("car")).toBe(3);
+    });
+
+    it("returns correct count after deletes", () => {
+      const { schemaService, contentService } = setup();
+      makeSchema(schemaService, "car", [
+        { label: "make", type: "text", required: true },
+      ]);
+
+      const e1 = contentService.create("car", { "1": "Civic" }, "editor1");
+      contentService.create("car", { "1": "Accord" }, "editor1");
+      contentService.create("car", { "1": "BMW" }, "editor1");
+
+      contentService.delete(e1.id);
+
+      expect(contentService.countForSchema("car")).toBe(2);
+    });
+
+    it("unknown schema → 404", () => {
+      const { contentService } = setup();
+      expectStatus(() => contentService.countForSchema("nope"), 404);
+    });
+  });
 });

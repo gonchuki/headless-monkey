@@ -145,6 +145,11 @@ export class ContentService {
     return { id: existing.record.id, schema: existing.record.schema };
   }
 
+  countForSchema(schemaName: string): number {
+    this.requireSchema(schemaName);
+    return this.repo.countBySchema(schemaName);
+  }
+
   /** Returns the schema for the public route projection; unknown schema → 404 (same as listPublic/getPublic). */
   getSchema(schemaName: string): SchemaEntry {
     return this.requireSchema(schemaName);
