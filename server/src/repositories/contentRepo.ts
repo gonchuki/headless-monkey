@@ -2,6 +2,20 @@ import type { Db } from "../db/database";
 import type { DecodedCursor, PaginationParams, PaginationResponse, ResolvedSortParams } from "../types";
 import { clampLimit, encodeCursor, parseCursor } from "../types";
 
+/** Build the SQL fragment for version filtering. `minVersion` → `>=`, `maxVersion` → `<`. */
+function buildVersionFilter(minVersion?: number, maxVersion?: number): string {
+  if (minVersion !== undefined) return " AND content.schema_version >= ?";
+  if (maxVersion !== undefined) return " AND content.schema_version < ?";
+  return "";
+}
+
+/** Build the params array for version filtering. */
+function buildVersionParams(minVersion?: number, maxVersion?: number): number[] {
+  if (minVersion !== undefined) return [minVersion];
+  if (maxVersion !== undefined) return [maxVersion];
+  return [];
+}
+
 export interface ContentRecord {
   id: number;
   schema: string;
@@ -160,14 +174,15 @@ export class ContentRepository {
   listEntries(
     schema: string,
     sort?: ResolvedSortParams,
-    minVersion?: number
+    minVersion?: number,
+    maxVersion?: number
   ): ContentEntryRow[] {
     const resolvedSort = sort ?? { sortField: "modified", sortOrder: "desc" };
     const orderClause = this.buildOrderClause(resolvedSort);
     const joinClause = this.buildJoinClause(resolvedSort);
 
-    const versionFilter = minVersion !== undefined ? " AND content.schema_version >= ?" : "";
-    const versionParams: number[] = minVersion !== undefined ? [minVersion] : [];
+    const versionFilter = buildVersionFilter(minVersion, maxVersion);
+    const versionParams = buildVersionParams(minVersion, maxVersion);
 
     const records = this.db
       .prepare(
@@ -228,7 +243,8 @@ export class ContentRepository {
     schema: string,
     pagination: PaginationParams,
     sort?: ResolvedSortParams,
-    minVersion?: number
+    minVersion?: number,
+    maxVersion?: number
   ): { entries: ContentEntryRow[]; pagination: PaginationResponse } {
     const limit = clampLimit(pagination.limit);
     const direction = pagination.direction === "backward" ? "backward" : "forward";
@@ -262,8 +278,8 @@ export class ContentRepository {
     let records: PageRecord[];
     let hasMore = false;
 
-    const versionFilter = minVersion !== undefined ? " AND content.schema_version >= ?" : "";
-    const versionParams: number[] = minVersion !== undefined ? [minVersion] : [];
+    const versionFilter = buildVersionFilter(minVersion, maxVersion);
+    const versionParams = buildVersionParams(minVersion, maxVersion);
 
     if (anchor !== null && direction === "backward") {
       // Backward: fetch entries "before" the anchor in display order, using
@@ -340,10 +356,10 @@ export class ContentRepository {
     const lastAnchor = this.anchorOf(records[records.length - 1], resolvedSort);
     const nextExists =
       direction === "backward"
-        ? this.keysetExists(col, resolvedSort, "forward", lastAnchor, schema, minVersion)
+        ? this.keysetExists(col, resolvedSort, "forward", lastAnchor, schema, minVersion, maxVersion)
         : hasMore;
     const prevExists =
-      anchor !== null && this.keysetExists(col, resolvedSort, "backward", firstAnchor, schema, minVersion);
+      anchor !== null && this.keysetExists(col, resolvedSort, "backward", firstAnchor, schema, minVersion, maxVersion);
 
     const paginationResult: PaginationResponse = {
       nextCursor: nextExists ? encodeCursor(lastAnchor.value, lastAnchor.id) : null,
@@ -524,11 +540,12 @@ export class ContentRepository {
     direction: "forward" | "backward",
     anchor: DecodedCursor,
     schema: string,
-    minVersion?: number
+    minVersion?: number,
+    maxVersion?: number
   ): boolean {
     const cond = this.buildKeysetCondition(col, sort, direction, anchor);
-    const versionFilter = minVersion !== undefined ? " AND content.schema_version >= ?" : "";
-    const versionParams: number[] = minVersion !== undefined ? [minVersion] : [];
+    const versionFilter = buildVersionFilter(minVersion, maxVersion);
+    const versionParams = buildVersionParams(minVersion, maxVersion);
     const row = this.db
       .prepare(
         `SELECT 1 FROM content${this.buildJoinClause(sort)} WHERE content.schema = ?${versionFilter} AND ${cond.sql} LIMIT 1`

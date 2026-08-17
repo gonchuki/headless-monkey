@@ -622,4 +622,140 @@ describe("Public content API (R18-R20)", () => {
       expect(back.body.pagination.prevCursor).toBeNull();
     });
   });
+
+  describe("conflicted filter", () => {
+    it("?conflicted=1 returns only conflicted entries; without param returns full set", async () => {
+      const { app, schemaService } = createTestApp();
+      const car = makeCarSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const token = editorToken();
+
+      // Create 3 entries
+      const e1 = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(makeField.id)]: "Civic" } });
+      const e2 = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(makeField.id)]: "Accord" } });
+      const e3 = await request(app)
+        .post("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(makeField.id)]: "BMW" } });
+      expect(e1.status).toBe(201);
+      expect(e2.status).toBe(201);
+      expect(e3.status).toBe(201);
+
+      // Breaking change: add a required field (vin) — all entries become conflicted
+      await request(app)
+        .patch("/api/schemas/car")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          fields: [
+            { id: makeField.id, label: "make", type: "text", required: true },
+            { label: "vin", type: "text", required: true },
+          ],
+        });
+
+      // Resolve e1 only — supply the new required field
+      const carSchema = await request(app)
+        .get("/api/schemas/car")
+        .set("Authorization", `Bearer ${token}`);
+      const vinField = carSchema.body.fields.find((f: { label: string }) => f.label === "vin");
+      const patched = await request(app)
+        .patch(`/api/entries/${e1.body.id}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(vinField.id)]: "VIN123" } });
+      expect(patched.status).toBe(200);
+
+      // Full list (no filter): 3 entries, e1 is not conflicted, e2/e3 are
+      const full = await request(app)
+        .get("/api/schemas/car/entries")
+        .set("Authorization", `Bearer ${token}`);
+      expect(full.status).toBe(200);
+      expect(full.body).toHaveLength(3);
+      expect(full.body.some((e: any) => e.id === e1.body.id && !e.conflict)).toBe(true);
+      expect(full.body.filter((e: any) => e.conflict).length).toBe(2);
+
+      // Conflicted filter: only e2 and e3
+      const conflicted = await request(app)
+        .get("/api/schemas/car/entries?conflicted=1")
+        .set("Authorization", `Bearer ${token}`);
+      expect(conflicted.status).toBe(200);
+      expect(conflicted.body).toHaveLength(2);
+      expect(conflicted.body.every((e: any) => e.conflict)).toBe(true);
+      const conflictedIds = new Set(conflicted.body.map((e: any) => e.id));
+      expect(conflictedIds.has(e2.body.id)).toBe(true);
+      expect(conflictedIds.has(e3.body.id)).toBe(true);
+      expect(conflictedIds.has(e1.body.id)).toBe(false);
+    });
+
+    it("forward cursor walk under ?conflicted=1 visits each conflicted entry exactly once", async () => {
+      const { app, schemaService } = createTestApp();
+      const car = makeCarSchema(schemaService);
+      const makeField = car.fields.find((f) => f.label === "make")!;
+      const token = editorToken();
+
+      // Create 5 entries
+      const entries: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        const created = await request(app)
+          .post("/api/schemas/car/entries")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ values: { [String(makeField.id)]: `Car ${i}` } });
+        entries.push(created.body.id);
+      }
+
+      // Breaking change: add a required field — all 5 become conflicted
+      await request(app)
+        .patch("/api/schemas/car")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          fields: [
+            { id: makeField.id, label: "make", type: "text", required: true },
+            { label: "vin", type: "text", required: true },
+          ],
+        });
+
+      // Resolve entries[0] and entries[3] — 3 remain conflicted
+      const carSchema = await request(app)
+        .get("/api/schemas/car")
+        .set("Authorization", `Bearer ${token}`);
+      const vinField = carSchema.body.fields.find((f: { label: string }) => f.label === "vin");
+      await request(app)
+        .patch(`/api/entries/${entries[0]}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(vinField.id)]: "VIN0" } });
+      await request(app)
+        .patch(`/api/entries/${entries[3]}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ values: { [String(vinField.id)]: "VIN3" } });
+
+      // Walk forward with limit=2 under ?conflicted=1
+      const visited = new Set<number>();
+      let cursor: string | null = null;
+      let pageCount = 0;
+
+      do {
+        const qs = cursor ? `conflicted=1&limit=2&cursor=${cursor}` : "conflicted=1&limit=2";
+        const page = await request(app)
+          .get(`/api/schemas/car/entries?${qs}`)
+          .set("Authorization", `Bearer ${token}`);
+        expect(page.status).toBe(200);
+        pageCount++;
+
+        for (const entry of page.body.entries) {
+          expect(visited.has(entry.id)).toBe(false); // no duplicates
+          visited.add(entry.id);
+          expect(entry.conflict).toBe(true);
+        }
+        cursor = page.body.pagination.nextCursor;
+      } while (cursor !== null);
+
+      // Should have visited exactly 3 conflicted entries across pages
+      expect(visited.size).toBe(3);
+      expect(pageCount).toBeGreaterThan(1); // forced multiple pages with limit=2
+    });
+  });
 });

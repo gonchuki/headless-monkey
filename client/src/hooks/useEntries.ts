@@ -33,11 +33,17 @@ export interface UseEntriesResult {
   remove: ReturnType<typeof useMutation<void, Error, number>>;
 }
 
-export function useEntries(schemaName: string, enabled = true, pagination?: PaginationParams, sort?: SortParams): UseEntriesResult {
+export function useEntries(
+  schemaName: string,
+  enabled = true,
+  pagination?: PaginationParams,
+  sort?: SortParams,
+  conflictedOnly = false
+): UseEntriesResult {
   const queryClient = useQueryClient();
   const key = pagination
-    ? [...queryKeys.entries(schemaName), { pagination }, { sort }] as const
-    : [...queryKeys.entries(schemaName), { sort }] as const;
+    ? [...queryKeys.entries(schemaName), { pagination }, { sort }, { conflicted: conflictedOnly }] as const
+    : [...queryKeys.entries(schemaName), { sort }, { conflicted: conflictedOnly }] as const;
 
   const query = useQuery<PaginatedEntries | ContentListEntry[]>({
     queryKey: key,
@@ -48,6 +54,7 @@ export function useEntries(schemaName: string, enabled = true, pagination?: Pagi
       if (pagination?.direction) params.set("direction", pagination.direction);
       if (sort?.sortField) params.set("sort_field", sort.sortField);
       if (sort?.sortOrder) params.set("sort_order", sort.sortOrder);
+      if (conflictedOnly) params.set("conflicted", "1");
       const qs = params.toString();
       const url = `/api/schemas/${encodeURIComponent(schemaName)}/entries${qs ? `?${qs}` : ""}`;
       if (pagination) {
