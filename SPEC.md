@@ -1,5 +1,6 @@
-# SPEC: headless-monkey CMS (v0.11 — 2026-08-12)
+# SPEC: headless-monkey CMS (v0.12 — 2026-08-16)
 
+v0.12 — public-data-API pagination/sorting blessed and documented in §4; §3's non-goal scoped to search only; R32 records conflicted-entry exclusion from schema-ref select (§3, §4, §2 R32).
 v0.11 — `schema_version` propagation becomes validation-based instead of blanket: on every schema update, each entry's stored data is validated against the new field definitions, and a compatible entry is bumped to the new version only when it would otherwise read as conflicted (`schema_version` below the new `compat_version`) (§2 R38). For breaking changes this bumps every compatible entry (as before); for non-breaking changes already-non-conflicted entries keep their version. This replaces R21's blanket bump and makes deconfliction automatic — an entry whose conflict is resolved by a change (a required field becoming optional, the conflicted field being deleted, a type-changed field being deleted) is bumped without per-change special-casing. The R35 retarget gate is unchanged (a mixed delete+retarget PATCH skips the bump). §2 R21, R38; §7 delete-field example updated.
 v0.10 — schema updates get a dry-run preview plus a confirmation gate: `PATCH /api/schemas/:name?preview=true` returns the would-be `{breaking, version, compatVersion, affectedEntries}` without writing or emitting SSE, with per-change-kind affected-entry rules and the R32 label convention (R36); the schema editor confirms breaking saves through an `<AlertDialog />` showing the affected entries, applies non-breaking saves immediately, and lands on the new `?conflicted=1` content filter after a confirmed breaking save (R29, R37)
 v0.9 — resolved OQ1/OQ2 from the v0.8 reconciliation: editor `POST`/`PATCH` writes are patch-like — an omitted key leaves the stored value unchanged, and an explicit `null` for an *optional* field clears its stored value (for a schema-ref field, the stored `content_ref` is removed); `null` for a *required* field is a validation error (422); the "never `null`" invariant applies to reads/serialization only, so the write-side `null` clear signal does not contradict it (§2 R16); editor list rows add `referencer_count`, the count of distinct entries referencing the row via schema-ref, so the delete confirmation can warn before the attempt (§4)
@@ -61,13 +62,13 @@ Client
 - R29. Routes: `/login`, `/admin` (users), `/schemas`, `/schemas/:name`, `/content`, `/content/:schema` (the same content list page filtered to one schema, with an "All schemas" selector that merges one entries query per schema into a single list), `/content/new`, `/content/:schema/:id`. The content routes accept `?conflicted=1` to filter the listing to conflicted entries only, with a "Show conflicted only" toggle. The schema create-route is `/schemas/new`, resolved through `/schemas/:name` (the editor treats `name === "new"` as create mode). `admin` tokens can only reach `/admin`; editor tokens cannot reach `/admin`.
 - R30. The schema editor is a sortable field grid with columns `type | label | required` in that order, plus a trailing actions column (reorder up/down, delete).
 - R31. The content editor is a dynamic 2-column form (`label | type-input`); required fields show a red `*` next to the label.
-- R32. A `schema-ref` field renders a `<select>` of the target schema's entries, labeled by the value of the target's first required field by `sort_order`. The fallback to first field by `sort_order` (then entry id) exists only for legacy schemas that predate the ≥1-required-field rule.
+- R32. A `schema-ref` field renders a `<select>` of the target schema's entries, labeled by the value of the target's first required field by `sort_order`. The fallback to first field by `sort_order` (then entry id) exists only for legacy schemas that predate the ≥1-required-field rule. Conflicted entries (`schema_version` below the target schema's `compat_version`) are excluded from the select's options.
 - R33. When editing a conflicted entry, the stored (old) version of each affected field renders disabled with the new enabled field below it.
 - R37. A breaking schema update (R14) requires confirmation before it is applied. The schema editor requests the R36 preview on save and, when `breaking` is true, shows an `<AlertDialog />` (R22/§5 role) naming the affected entries (count plus an inline list of `label #id`) before sending the PATCH; the dialog never navigates — canceling returns to the editor with the draft untouched, and confirming lands on `/content/:schema?conflicted=1` (R29) after the save succeeds. A non-breaking update (R13) applies immediately without a confirmation dialog.
 
 ## 3. Non-goals (binding)
 
-No pagination or search in the data API. No content writes through the public API (it is read-only). No registration/signup UI — only `admin` creates editors. No self-service password change. No refresh-token rotation, password reset, rate limiting, or account lockout. No content/history versioning (only schema versioning). No asset/file upload. No i18n, theming, or dark mode. No roles beyond `admin`/`editor`. No per-field permissions. No email/notification system beyond in-app toasts.
+No search in the data API. No content writes through the public API (it is read-only). No registration/signup UI — only `admin` creates editors. No self-service password change. No refresh-token rotation, password reset, rate limiting, or account lockout. No content/history versioning (only schema versioning). No asset/file upload. No i18n, theming, or dark mode. No roles beyond `admin`/`editor`. No per-field permissions. No email/notification system beyond in-app toasts.
 
 ## 4. Contracts (frozen)
 
@@ -111,9 +112,18 @@ CREATE INDEX idx_content_refs_target ON content_refs(target_content_id);
 JWT: HS256, secret `JWT_SECRET` (`.env`), payload `{ sub: <login>, role: 'admin'|'editor', iat, exp }`, expiry 8h. Sent as `Authorization: Bearer <token>`.
 
 Public API (no auth):
-- `GET /api/content/:schema` → 200 `{ schema: { name, version, fields: { "<field_id>": "<label>", ... } }, entries: [ { id, schema_version, values: { "<field_id>": <value>, ... } } ] }` (valid entries only); 404 unknown schema.
+- `GET /api/content/:schema` → 200 `{ schema: { name, version, fields: { "<field_id>": "<label>", ... } }, entries: [ { id, schema_version, values: { "<field_id>": <value>, ... } } ], pagination: { nextCursor, prevCursor } }` (valid entries only); 404 unknown schema.
 - `GET /api/content/:schema/:id` → the same `{schema, entries}` shape with a one-element `entries` array; 404 unknown id; 422 conflicted.
 - `values` keys are `String(field_id)` (the stable id, unique across versions by R13's id-stable contract); labels are provided by `schema.fields` for display and for detecting renames; schema-ref values serialize as `{id: <target_entry_id>, schema: <ref_schema_name>}`. Public entries do **not** carry a `schema` field — the envelope's `schema.name` names the schema. There is no version header — `schema.version` is authoritative.
+- Query params: `limit`, `cursor`, `direction`, `sort_field`, `sort_order`. Any of `limit`/`cursor`/`direction` present → paginated path; none present → all valid entries, no pagination. Sorting without pagination params (`sort_field`/`sort_order` alone) returns all valid entries in that order.
+- `limit`: integer, clamped to [1, 200]; absent or non-numeric on the paginated path → 50.
+- `cursor`: opaque string; undecodable → first page (lenient).
+- `direction`: `forward` | `backward`; any other value is ignored (treated as forward).
+- `sort_field`: `id` | `date` | `modified` | a positive integer field_id. `sort_order`: `asc` | `desc`; with `sort_order` but no `sort_field`, the sort is by `modified` in that order.
+- 422 rules: non-integer/non-literal `sort_field` → 422; integer `sort_field` not a field of the schema → 422; sorting by `boolean` or `schema-ref` field → 422; invalid `sort_order` → 422.
+- Default ordering (no sort params): `modified desc` (last-modified date descending, ties broken by entry id descending).
+- NULLS LAST: for a custom-field sort, rows with a NULL value sort last in display order, in both directions.
+- Envelope: both public routes respond with `pagination: { nextCursor, prevCursor }` (`string | null`); cursors are null exactly when no entries remain in that direction (keyset on the sort column with entry-id tiebreak).
 
 Auth & control panel (Bearer auth unless noted):
 - `POST /api/auth/login` `{login,password}` → `{token}` (no auth). `POST /api/auth/logout` → 204. `GET /api/auth/me` → `{login, role}`.
