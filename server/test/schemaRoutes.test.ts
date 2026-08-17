@@ -559,16 +559,18 @@ describe("Schema Routes", () => {
             schemaService.create("company", [
               { label: "name", type: "text", required: true },
             ], "editor1");
-            schemaService.create("car", [
+            const carSchema = schemaService.create("car", [
               { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
               { label: "make", type: "text", required: true },
             ], "editor1");
+            const ownerField = carSchema.fields.find((f) => f.label === "owner")!;
+            const makeField = carSchema.fields.find((f) => f.label === "make")!;
             await request(app)
               .patch("/api/schemas/car")
               .send({
                 fields: [
-                  { id: 1, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
-                  { id: 2, label: "make", type: "text", required: true },
+                  { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+                  { id: makeField.id, label: "make", type: "text", required: true },
                 ],
               });
             break;

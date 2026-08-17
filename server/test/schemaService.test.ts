@@ -398,14 +398,17 @@ describe("SchemaService", () => {
       service.create("person", [
         { label: "name", type: "text", required: true },
       ], "editor1");
-      service.create("car", [
+      const car = service.create("car", [
         { label: "owner_name", type: "text", required: false },
         { label: "make", type: "text", required: true },
       ], "editor1");
 
+      const ownerNameField = car.fields.find((f) => f.label === "owner_name")!;
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
       const schema = service.update("car", [
-        { id: 1, label: "owner_name", type: "schema-ref", required: false, ref_schema: "person" },
-        { id: 2, label: "make", type: "text", required: true },
+        { id: ownerNameField.id, label: "owner_name", type: "schema-ref", required: false, ref_schema: "person" },
+        { id: makeField.id, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(2); // = new version
@@ -434,14 +437,17 @@ describe("SchemaService", () => {
       service.create("company", [
         { label: "name", type: "text", required: true },
       ], "editor1");
-      service.create("car", [
+      const car = service.create("car", [
         { label: "owner", type: "schema-ref", required: false, ref_schema: "person" },
         { label: "make", type: "text", required: true },
       ], "editor1");
 
+      const ownerField = car.fields.find((f) => f.label === "owner")!;
+      const makeField = car.fields.find((f) => f.label === "make")!;
+
       const schema = service.update("car", [
-        { id: 1, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
-        { id: 2, label: "make", type: "text", required: true },
+        { id: ownerField.id, label: "owner", type: "schema-ref", required: false, ref_schema: "company" },
+        { id: makeField.id, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema.version).toBe(2);
       expect(schema.compat_version).toBe(2); // = new version
@@ -927,6 +933,69 @@ describe("SchemaService", () => {
         { id: 1, label: "make", type: "text", required: true },
       ], "editor1");
       expect(schema2.fields.length).toBe(1);
+    });
+
+    it("rejects foreign field ids in PATCH (cross-schema corruption)", () => {
+      const db = openDatabase();
+      const service = new SchemaService(db);
+
+      // Create two schemas so each has its own field id ranges.
+      service.create("car", [
+        { label: "make", type: "text", required: true },
+      ], "editor1");
+      service.create("boat", [
+        { label: "name", type: "text", required: true },
+      ], "editor1");
+
+      // Look up boat's real field id from the SchemaEntry — never hardcode.
+      const boatSchema = service.get("boat")!;
+      const boatFieldId = boatSchema.fields[0].id;
+
+      // Try to PATCH car with a field carrying boat's field id.
+      expect(() =>
+        service.update("car", [
+          { id: boatFieldId, label: "hijacked", type: "text", required: true },
+        ], "editor1")
+      ).toThrow(SchemaServiceError);
+
+      // Verify the error is 422.
+      try {
+        service.update("car", [
+          { id: boatFieldId, label: "hijacked", type: "text", required: true },
+        ], "editor1");
+        expect.fail("Should have thrown");
+      } catch (err: any) {
+        expect(err.statusCode).toBe(422);
+      }
+
+      // Assert no corruption: boat's field row is unchanged.
+      const boatAfter = service.get("boat")!;
+      expect(boatAfter.fields[0].id).toBe(boatFieldId);
+      expect(boatAfter.fields[0].label).toBe("name");
+      expect(boatAfter.fields[0].type).toBe("text");
+      expect(boatAfter.version).toBe(1);
+
+      // Assert car is unchanged.
+      const carAfter = service.get("car")!;
+      expect(carAfter.version).toBe(1);
+      expect(carAfter.fields.length).toBe(1);
+      expect(carAfter.fields[0].label).toBe("make");
+
+      // Same rejection on the preview path.
+      expect(() =>
+        service.previewUpdate("car", [
+          { id: boatFieldId, label: "hijacked", type: "text", required: true },
+        ])
+      ).toThrow(SchemaServiceError);
+
+      try {
+        service.previewUpdate("car", [
+          { id: boatFieldId, label: "hijacked", type: "text", required: true },
+        ]);
+        expect.fail("Should have thrown");
+      } catch (err: any) {
+        expect(err.statusCode).toBe(422);
+      }
     });
   });
 
