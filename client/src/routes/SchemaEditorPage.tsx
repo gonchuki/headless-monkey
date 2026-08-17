@@ -272,7 +272,11 @@ export default function SchemaEditorPage() {
 
   function handleSaveConfirm() {
     if (pendingSave == null || deleted) return;
-    const breakingAtConfirm = previewMutation.data?.breaking ?? false;
+    // Defense in depth: do not proceed without a preview result.
+    // The confirm button is disabled while the preview is pending or errored,
+    // but the handler should not depend on the button state.
+    if (previewMutation.data == null) return;
+    const breakingAtConfirm = previewMutation.data.breaking;
     const { fields } = pendingSave;
     setPendingSave(null);
     update.mutate(
