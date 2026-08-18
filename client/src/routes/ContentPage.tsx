@@ -131,20 +131,23 @@ export default function ContentPage() {
   const cursorPrev = searchParams.get("cursor_prev");
 
   const hasCursorState = cursorNext != null || cursorPrev != null;
-  const paginationParams: PaginationParams | undefined = hasCursorState
-    ? {
-        limit: PAGE_LIMIT,
-        ...(cursorNext != null ? { cursor: cursorNext, direction: "forward" as const } : {}),
-        ...(cursorPrev != null ? { cursor: cursorPrev, direction: "backward" as const } : {}),
-      }
-    : undefined;
+  // Always request a bounded page (limit) — including the first page. Without a
+  // limit the server falls back to "return all rows" in a flat response with
+  // null cursors, which leaves hasNextPage/hasPrevPage false on page 1 and the
+  // <Pagination> control never renders (and page 2 is unreachable).
+  const paginationParams: PaginationParams = {
+    limit: PAGE_LIMIT,
+    ...(cursorNext != null ? { cursor: cursorNext, direction: "forward" as const } : {}),
+    ...(cursorPrev != null ? { cursor: cursorPrev, direction: "backward" as const } : {}),
+  };
 
   const listUrl = buildListUrl({ allView, selected, conflictedOnly, sortField: sortFieldRaw, sortOrder: sortOrderRaw });
 
   // The delete mutation is always keyed to the deleted entry's own schema
   const remove = useDeleteEntry();
 
-  // Filtered view: always pass pagination params (undefined on first page = non-paginated)
+  // Filtered view: always pass pagination params (always includes limit, so the
+  // server returns a bounded page + next/prev cursors even on the first page)
   const filtered = useEntries(selected ?? "", true, paginationParams, allView ? undefined : sort, conflictedOnly);
 
   // All-view entries: driven by per-schema state model
