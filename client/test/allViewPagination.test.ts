@@ -7,8 +7,6 @@ import {
   isStuck,
   hasNext,
   hasPrev,
-  encodeState,
-  decodeState,
 } from "@/lib/allViewPagination";
 
 function makeEntry(overrides: Partial<ContentListEntry> = {}): ContentListEntry {
@@ -336,61 +334,5 @@ describe("allViewPagination transitions", () => {
     expect(isStuck(retreated, "A")).toBe(false);
     // B retreats normally
     expect(retreated.schemas.B.cursor).toBe("b_prev_1");
-  });
-});
-
-describe("allViewPagination codec", () => {
-  it("encodeState → decodeState round-trips", () => {
-    const state = {
-      depth: 3,
-      schemas: {
-        A: { cursor: "abc", direction: "fwd" as const, stuckAt: undefined },
-        B: { stuckAt: 2 },
-      },
-    };
-    const encoded = encodeState(state);
-    const decoded = decodeState(encoded);
-
-    expect(decoded.depth).toBe(3);
-    expect(decoded.schemas.A.cursor).toBe("abc");
-    expect(decoded.schemas.A.direction).toBe("fwd");
-    expect(decoded.schemas.B.stuckAt).toBe(2);
-  });
-
-  it("decodeState(null) returns initial state", () => {
-    const decoded = decodeState(null);
-    expect(decoded).toEqual(initialState());
-  });
-
-  it("decodeState('garbage') returns initial state", () => {
-    const decoded = decodeState("garbage");
-    expect(decoded).toEqual(initialState());
-  });
-
-  it("decodeState with wrong shape returns initial state", () => {
-    const bad = JSON.stringify({ depth: "not-a-number", schemas: {} });
-    const decoded = decodeState(bad);
-    expect(decoded).toEqual(initialState());
-  });
-
-  it("decodeState with negative depth returns initial state", () => {
-    const bad = JSON.stringify({ depth: -1, schemas: {} });
-    const decoded = decodeState(bad);
-    expect(decoded).toEqual(initialState());
-  });
-
-  it("decodeState with schemas as array returns initial state", () => {
-    const bad = JSON.stringify({ depth: 1, schemas: [] });
-    const decoded = decodeState(bad);
-    expect(decoded).toEqual(initialState());
-  });
-
-  it("old-style cursor_next param yields initial state (codec only reads allview)", () => {
-    // The codec only reads the `allview` param. Old params like cursor_next
-    // are not passed to decodeState — they're simply ignored by the route.
-    // This test verifies that decodeState(null) is the correct fallback.
-    const decoded = decodeState(null);
-    expect(decoded.depth).toBe(1);
-    expect(Object.keys(decoded.schemas)).toHaveLength(0);
   });
 });

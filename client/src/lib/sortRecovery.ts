@@ -20,8 +20,13 @@ export function isStaleSortError(error: unknown): boolean {
 }
 
 /**
- * Returns a new URLSearchParams with `sort_field` and `sort_order` keys removed,
- * or `null` when neither key is present (no-op guard).
+ * Returns a new URLSearchParams with `sort_field`, `sort_order`, and `page`
+ * keys removed, or `null` when neither sort key is present (no-op guard).
+ *
+ * `page` is dropped because a page counter derived under a dead sort is
+ * meaningless: with the sort params gone the listing restarts at page 1, so
+ * any surviving `page` would point at the wrong rows (and the pagination
+ * position is no longer in the URL — there is no state to keep in sync).
  */
 export function dropSortParams(params: URLSearchParams): URLSearchParams | null {
   const hasSortField = params.has("sort_field");
@@ -32,6 +37,7 @@ export function dropSortParams(params: URLSearchParams): URLSearchParams | null 
   const cleaned = new URLSearchParams(params);
   cleaned.delete("sort_field");
   cleaned.delete("sort_order");
+  cleaned.delete("page");
 
   return cleaned;
 }
