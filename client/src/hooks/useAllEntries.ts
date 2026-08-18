@@ -1,9 +1,8 @@
 import { useQueries } from "@tanstack/react-query";
-import { apiFetch, type ContentListEntry } from "@/lib/api";
-import { queryKeys } from "@/lib/query";
-import type { PaginatedEntries } from "@/hooks/useEntries";
+import type { ContentListEntry } from "@/lib/api";
 import { isStuck } from "@/lib/allViewPagination";
 import type { AllViewState } from "@/lib/allViewPagination";
+import { buildEntriesRequest, type PaginatedEntries } from "@/hooks/useEntries";
 
 export interface AllEntriesQuery {
   data: ContentListEntry[];
@@ -37,23 +36,19 @@ export function useAllEntries(
   });
 
   const queries = useQueries({
-    queries: queryConfigs.map(({ schema, cursor, direction }) => ({
-      queryKey: [
-        ...queryKeys.entries(schema),
-        { allView: true, cursor, direction, conflicted: conflictedOnly },
-      ] as const,
-      queryFn: () => {
-        const params = new URLSearchParams();
-        params.set("limit", String(limit));
-        if (cursor != null) params.set("cursor", cursor);
-        if (direction) params.set("direction", direction);
-        if (conflictedOnly) params.set("conflicted", "1");
-        const qs = params.toString();
-        const url = `/api/schemas/${encodeURIComponent(schema)}/entries${qs ? `?${qs}` : ""}`;
-        return apiFetch<PaginatedEntries>(url);
-      },
-      enabled: schema.length > 0,
-    })),
+    queries: queryConfigs.map(({ schema, cursor, direction }) => {
+      const { queryKey, queryFn } = buildEntriesRequest({
+        schema,
+        allView: true,
+        conflicted: conflictedOnly,
+        pagination: { limit, cursor, direction },
+      });
+      return {
+        queryKey,
+        queryFn: () => queryFn() as Promise<PaginatedEntries>,
+        enabled: schema.length > 0,
+      };
+    }),
   });
 
   const errored = queries.find((query) => query.isError);

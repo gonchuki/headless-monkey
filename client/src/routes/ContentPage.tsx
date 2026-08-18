@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, ArrowLeft, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { Skeleton } from "@/components/shared/Skeleton";
@@ -24,7 +25,12 @@ import { toast } from "@/components/ui/toast";
 import { useDeleteEntry } from "@/hooks/useEntryMutations";
 import { useAllEntries } from "@/hooks/useAllEntries";
 import { useEntries } from "@/hooks/useEntries";
-import type { PaginationParams, SortParams } from "@/hooks/useEntries";
+import {
+  buildEntriesRequest,
+  type PaginationParams,
+  type PaginatedEntries,
+  type SortParams,
+} from "@/hooks/useEntries";
 import { useRealtime } from "@/hooks/useRealtime";
 import { useSchemas } from "@/hooks/useSchemas";
 import type { ContentListEntry, PaginationResponse } from "@/lib/api";
@@ -32,83 +38,120 @@ import { entryLabel, schemaLabelField } from "@/lib/entries";
 import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
 import { dropSortParams, isStaleSortError } from "@/lib/sortRecovery";
-import { SchemaBadge } from "@/components/shared/SchemaBadge";
-import { Switch } from "@/components/ui/switch";
 import {
-  decodeState,
-  encodeState,
   advance,
-  retreat,
   hasNext as hasNextLib,
   hasPrev as hasPrevLib,
+  initialState,
+  isStuck,
+  retreat,
+  type AllViewState,
 } from "@/lib/allViewPagination";
+import { SchemaBadge } from "@/components/shared/SchemaBadge";
+import { Switch } from "@/components/ui/switch";
 
 const ALL_SCHEMAS_VALUE = "__all__";
 const PAGE_LIMIT = 50;
+
+/**
+ * Hard cap on reconstruction-walk steps. Exceeding it is the same early-stop
+ * clamp as exhaustion: stop at the reached page and `replace`-rewrite the URL
+ * to that page. Bounds pathological `?page=99999` URLs. (Start value; the
+ * product owner may tune it.)
+ */
+const WALK_STEP_CAP = 20;
+
+/**
+ * Single-schema pagination anchor carried in `location.state.pagination`:
+ * the exact fetch params (minus limit) that produced the current page.
+ * Page 1 never has a cursor, so the key is omitted entirely there.
+ */
+interface SingleSchemaAnchor {
+  cursor?: string;
+  direction?: "forward" | "backward";
+}
+
+/**
+ * Build a position-aware URL: base path + optional `conflicted`, `page`
+ * (only when > 1), `sort_field`, `sort_order`. Cursors and all-view state
+ * never appear in the URL — position rides on `location.state`.
+ */
+function buildPageUrl(opts: {
+  allView: boolean;
+  selected: string | null;
+  targetPage: number;
+  conflictedOnly: boolean;
+  sortField?: string | null;
+  sortOrder?: string | null;
+}): string {
+  const base = opts.allView ? "/content" : `/content/${encodeURIComponent(opts.selected ?? "")}`;
+  const params = new URLSearchParams();
+  if (opts.conflictedOnly) params.set("conflicted", "1");
+  if (opts.targetPage > 1) params.set("page", String(opts.targetPage));
+  if (opts.sortField) params.set("sort_field", opts.sortField);
+  if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
+/** Plain page-1 list URL (no `page` param) for editor-return flows. */
+function buildListUrl(opts: {
+  allView: boolean;
+  selected: string | null;
+  conflictedOnly: boolean;
+  sortField?: string | null;
+  sortOrder?: string | null;
+}): string {
+  return buildPageUrl({ ...opts, targetPage: 1 });
+}
+
+/** Type guard for the single-schema anchor in `location.state`. */
+function isSingleSchemaAnchor(value: unknown): value is SingleSchemaAnchor {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if ("depth" in v || "schemas" in v) return false; // AllViewState — different view
+  if ("cursor" in v && typeof v.cursor !== "string") return false;
+  if ("direction" in v && v.direction !== "forward" && v.direction !== "backward") return false;
+  return true;
+}
+
+/**
+ * Type guard for all-view state in `location.state`, mirroring the state
+ * machine's `AllViewState`/`SchemaPageState` shapes.
+ */
+function isAllViewState(value: unknown): value is AllViewState {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.depth !== "number" || !Number.isInteger(v.depth) || v.depth < 1) return false;
+  if (typeof v.schemas !== "object" || v.schemas === null || Array.isArray(v.schemas)) return false;
+  for (const s of Object.values(v.schemas as Record<string, unknown>)) {
+    if (typeof s !== "object" || s === null || Array.isArray(s)) return false;
+    const so = s as Record<string, unknown>;
+    if ("cursor" in so && typeof so.cursor !== "string") return false;
+    if ("direction" in so && so.direction !== "fwd" && so.direction !== "bwd") return false;
+    if (
+      "stuckAt" in so &&
+      (typeof so.stuckAt !== "number" || !Number.isInteger(so.stuckAt) || (so.stuckAt as number) < 1)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function errorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
 }
 
-/** Derive a stable list URL for editor return flows. */
-function buildListUrl(opts: { allView: boolean; selected: string | null; conflictedOnly: boolean; sortField?: string | null; sortOrder?: string | null }): string {
-  const base = opts.allView ? "/content" : `/content/${encodeURIComponent(opts.selected ?? "")}`;
-  const params = new URLSearchParams();
-  if (opts.conflictedOnly) params.set("conflicted", "1");
-  if (opts.sortField) params.set("sort_field", opts.sortField);
-  if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
-  const qs = params.toString();
-  return qs ? `${base}?${qs}` : base;
-}
-
-/** Build a URL for a specific page in the single-schema view. */
-function buildSingleSchemaPageUrl(opts: {
-  selected: string | null;
-  conflictedOnly: boolean;
-  targetPage: number;
-  pagination?: PaginationParams;
-  sortField?: string | null;
-  sortOrder?: string | null;
-}): string {
-  const base = `/content/${encodeURIComponent(opts.selected ?? "")}`;
-  const params = new URLSearchParams();
-  if (opts.conflictedOnly) params.set("conflicted", "1");
-  if (opts.targetPage > 1) params.set("page", String(opts.targetPage));
-  if (opts.pagination) {
-    if (opts.pagination.direction === "forward" && opts.pagination.cursor != null) {
-      params.set("cursor_next", String(opts.pagination.cursor));
-    } else if (opts.pagination.direction === "backward" && opts.pagination.cursor != null) {
-      params.set("cursor_prev", String(opts.pagination.cursor));
-    }
-  }
-  if (opts.sortField) params.set("sort_field", opts.sortField);
-  if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
-  const qs = params.toString();
-  return qs ? `${base}?${qs}` : base;
-}
-
-/** Build a URL for the all-view with the given allview state encoded. */
-function buildAllViewPageUrl(opts: {
-  conflictedOnly: boolean;
-  allviewState: string;
-  sortField?: string | null;
-  sortOrder?: string | null;
-}): string {
-  const params = new URLSearchParams();
-  if (opts.conflictedOnly) params.set("conflicted", "1");
-  params.set("allview", opts.allviewState);
-  if (opts.sortField) params.set("sort_field", opts.sortField);
-  if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
-  const qs = params.toString();
-  return `/content?${qs}`;
-}
-
 export default function ContentPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const queryClient = useQueryClient();
   const { schema: schemaParam } = useParams();
   const [searchParams] = useSearchParams();
   const { listQuery: schemasQuery } = useSchemas();
   const [entryToDelete, setEntryToDelete] = useState<ContentListEntry | null>(null);
+  const [walkPending, setWalkPending] = useState(false);
 
   const schemas = schemasQuery.data ?? [];
   const selected = schemaParam ?? null;
@@ -122,35 +165,60 @@ export default function ContentPage() {
   const sortOrder: "asc" | "desc" = sortOrderRaw === "asc" ? "asc" : "desc";
   const sort: SortParams = { sortField, sortOrder };
 
-  // ---- All-view pagination state ----
-  const allViewState = decodeState(searchParams.get("allview"));
+  // ---- Page counter (URL): an integer >= 1. Absent -> page 1 (no rewrite).
+  // Present but invalid -> page 1, and the param is rewritten away below.
+  const pageRaw = searchParams.get("page");
+  const pageRawNumber = pageRaw != null ? Number(pageRaw) : 1;
+  const pageParamValid = pageRaw == null || (Number.isInteger(pageRawNumber) && pageRawNumber >= 1);
+  const page = pageParamValid ? pageRawNumber : 1;
 
-  // ---- Single-schema pagination state (unchanged) ----
-  const page = Number(searchParams.get("page")) || 1;
-  const cursorNext = searchParams.get("cursor_next");
-  const cursorPrev = searchParams.get("cursor_prev");
+  // ---- Position (location.state.pagination) ----
+  // Single-schema: an anchor object; all-view: the AllViewState. Missing or
+  // mismatched state is never an error — the reconstruction walk handles it.
+  const stateRecord =
+    location.state != null && typeof location.state === "object" && !Array.isArray(location.state)
+      ? (location.state as Record<string, unknown>)
+      : null;
+  const rawPagination = stateRecord?.pagination;
 
-  const hasCursorState = cursorNext != null || cursorPrev != null;
-  // Always request a bounded page (limit) — including the first page. Without a
-  // limit the server falls back to "return all rows" in a flat response with
-  // null cursors, which leaves hasNextPage/hasPrevPage false on page 1 and the
-  // <Pagination> control never renders (and page 2 is unreachable).
-  const paginationParams: PaginationParams = {
-    limit: PAGE_LIMIT,
-    ...(cursorNext != null ? { cursor: cursorNext, direction: "forward" as const } : {}),
-    ...(cursorPrev != null ? { cursor: cursorPrev, direction: "backward" as const } : {}),
-  };
+  const candidateAnchor = isSingleSchemaAnchor(rawPagination) ? rawPagination : null;
+  // An anchor must actually carry a cursor (page 1 is implicitly anchored).
+  const singleAnchor: SingleSchemaAnchor | null =
+    !allView && candidateAnchor != null && candidateAnchor.cursor != null ? candidateAnchor : null;
+  const allViewAnchor = allView && isAllViewState(rawPagination) ? (rawPagination as AllViewState) : null;
+  const stateMatchesPage = allView ? allViewAnchor?.depth === page : singleAnchor != null;
+
+  const allViewState: AllViewState = allViewAnchor ?? initialState();
+
+  // Single-schema fetch params. Always include `limit` — including on the
+  // first page — so the server returns a bounded page with cursors. Page > 1
+  // adds the location-state anchor (the only remaining cursor source); while
+  // a walk is pending there is no anchor, so page-1 params are requested —
+  // the very key the walk's first step uses, so both coalesce into one fetch.
+  const paginationParams: PaginationParams = { limit: PAGE_LIMIT };
+  if (!allView && page > 1 && singleAnchor != null) {
+    paginationParams.cursor = singleAnchor.cursor;
+    if (singleAnchor.direction != null) paginationParams.direction = singleAnchor.direction;
+  }
+
+  // Walk trigger: page/depth > 1 with no position state for this view/page.
+  const walkNeeded = page > 1 && !stateMatchesPage;
 
   const listUrl = buildListUrl({ allView, selected, conflictedOnly, sortField: sortFieldRaw, sortOrder: sortOrderRaw });
 
   // The delete mutation is always keyed to the deleted entry's own schema
   const remove = useDeleteEntry();
 
-  // Filtered view: always pass pagination params (always includes limit, so the
-  // server returns a bounded page + next/prev cursors even on the first page)
-  const filtered = useEntries(selected ?? "", true, paginationParams, allView ? undefined : sort, conflictedOnly);
+  const filtered = useEntries(
+    allView ? "" : (selected ?? ""),
+    !allView,
+    paginationParams,
+    allView ? undefined : sort,
+    conflictedOnly,
+  );
 
-  // All-view entries: driven by per-schema state model
+  // All-view entries: identical per-schema requests to the reconstruction
+  // walk, so walked pages are cache-warm for the interactive navigation.
   const allEntriesQuery = useAllEntries(
     allView ? schemas.map((schema) => schema.name) : [],
     allViewState,
@@ -158,7 +226,6 @@ export default function ContentPage() {
     conflictedOnly,
   );
 
-  // Determine entries and pagination based on view type
   let entries: ContentListEntry[];
   let pagination: PaginationResponse;
   let entriesIsPending: boolean;
@@ -168,7 +235,6 @@ export default function ContentPage() {
 
   if (allView) {
     entries = allEntriesQuery.data;
-    // Build a dummy pagination response for compatibility — not used in all-view
     pagination = { nextCursor: null, prevCursor: null };
     entriesIsPending = allEntriesQuery.isPending;
     entriesIsError = allEntriesQuery.isError;
@@ -183,11 +249,175 @@ export default function ContentPage() {
     entriesRefetch = filtered.refetch;
   }
 
-  // ---- Stale sort recovery effect ----
-  // When the listing query errors with a stale-sort message and the URL carries
-  // sort params, rewrite the URL to drop them. After the rewrite the params are
-  // gone so the guard fails and the effect cannot navigate again (loop-safe).
+  // --------------------------------------------------------------------
+  // Reconstruction walk.
+  //
+  // Missing position state (shared link in a fresh tab, address-bar entry,
+  // restored tabs, evicted sessions) is the *common* path, not an error:
+  // walk forward from page 1 under the URL's current sort/filter and land
+  // on the requested page — or clamp to the reached page when the data is
+  // exhausted or the step cap is hit. Requests go through the same helpers
+  // and cache keys as the listing hooks, so walked pages render from cache.
+  // --------------------------------------------------------------------
   useEffect(() => {
+    if (!walkNeeded) return;
+    if (schemasQuery.isPending || schemasQuery.data == null) return; // all-view needs the schema list
+
+    const urlOpts = {
+      allView,
+      selected,
+      conflictedOnly,
+      sortField: sortFieldRaw,
+      sortOrder: sortOrderRaw,
+    };
+    const base = allView ? "/content" : `/content/${encodeURIComponent(selected ?? "")}`;
+    const schemaNames = schemasQuery.data.map((schema) => schema.name);
+
+    let disposed = false;
+    setWalkPending(true);
+
+    /**
+     * Land the walk result: replace the current entry at the reached page
+     * and stamp `location.state.pagination` (or drop the key on page/depth 1)
+     * so a refresh resumes without re-walking. Stamps and clamps always share
+     * one navigation so the state and URL page agree.
+     */
+    const finish = (reachedPage: number, stateValue: unknown) => {
+      if (disposed) return;
+      const currentState = { ...(stateRecord ?? {}) };
+      if (stateValue == null) {
+        delete currentState.pagination;
+      } else {
+        currentState.pagination = stateValue;
+      }
+      const state = Object.keys(currentState).length > 0 ? currentState : null;
+      navigate(buildPageUrl({ ...urlOpts, targetPage: reachedPage }), { replace: true, state });
+      setWalkPending(false);
+    };
+
+    /** Abort with a clean rewrite — never a fatal listing error. */
+    const fail = (error: unknown) => {
+      if (disposed) return;
+      if (isStaleSortError(error)) {
+        // Same rewrite the stale-sort recovery performs: drop sort (which also
+        // drops page), keep conflicted, replace.
+        const cleaned = dropSortParams(searchParams);
+        if (cleaned != null) {
+          const qs = cleaned.toString();
+          navigate(qs ? `${base}?${qs}` : base, { replace: true });
+          setWalkPending(false);
+          return;
+        }
+      }
+      // Unknown failure (or nothing to drop): restart at page 1 under the
+      // current criteria.
+      navigate(buildPageUrl({ ...urlOpts, targetPage: 1 }), { replace: true });
+      setWalkPending(false);
+    };
+
+    // ---- single-schema walk: fetch pages 1..target forward ----
+    async function walkSingle() {
+      for (let step = 1, cursor: string | undefined = undefined, anchor: SingleSchemaAnchor = {}; step <= Math.min(page, WALK_STEP_CAP); step++) {
+        const pagination: PaginationParams = { limit: PAGE_LIMIT };
+        if (cursor != null) {
+          pagination.cursor = cursor;
+          pagination.direction = "forward";
+        }
+        const config = buildEntriesRequest({ schema: selected!, conflicted: conflictedOnly, sort, pagination });
+        const data = (await queryClient.fetchQuery({ queryKey: config.queryKey, queryFn: config.queryFn })) as PaginatedEntries;
+        if (disposed) return;
+        anchor = cursor != null ? { cursor, direction: "forward" } : {};
+        cursor = data.pagination.nextCursor ?? undefined;
+        const reached = step;
+        if (cursor == null) {
+          finish(reached, reached === 1 ? null : anchor); // exhausted — reached is the last real page
+          return;
+        }
+        if (step === page || step === WALK_STEP_CAP) {
+          finish(reached, anchor); // target reached or cap hit
+          return;
+        }
+      }
+    }
+
+    // ---- all-view walk: replay the per-schema state machine per depth ----
+    async function walkAll() {
+      let state = initialState();
+      const maxDepth = Math.min(page, WALK_STEP_CAP);
+      for (let depth = 1; depth <= maxDepth; depth++) {
+        const visible = schemaNames.filter((name) => !isStuck(state, name));
+        const configs = visible.map((name) => {
+          const pageState = state.schemas[name];
+          const config = buildEntriesRequest({
+            schema: name,
+            allView: true,
+            conflicted: conflictedOnly,
+            pagination: { limit: PAGE_LIMIT, cursor: pageState?.cursor, direction: pageState?.direction },
+          });
+          return { schema: name, queryKey: config.queryKey, queryFn: config.queryFn };
+        });
+        const cursors: Record<string, string | null> = {};
+        for (const config of configs) {
+          const data = (await queryClient.fetchQuery({ queryKey: config.queryKey, queryFn: config.queryFn })) as PaginatedEntries;
+          if (disposed) return;
+          cursors[config.schema] = data.pagination?.nextCursor ?? null;
+        }
+        if (disposed) return;
+        if (!hasNextLib(state, cursors)) {
+          // Exhausted: `depth` is the last real page.
+          finish(state.depth, state);
+          return;
+        }
+        if (depth === page || depth === maxDepth) {
+          // Target reached (or cap hit) — carry exactly the state that
+          // produced the page-`depth` fetches.
+          finish(state.depth, state);
+          return;
+        }
+        state = advance(state, cursors);
+      }
+    }
+
+    (async () => {
+      try {
+        if (allView) await walkAll();
+        else await walkSingle();
+      } catch (error) {
+        fail(error);
+      }
+    })();
+
+    return () => {
+      // Generation guard: any navigation/filter change disposes the in-flight
+      // run before its result can be applied.
+      disposed = true;
+      setWalkPending(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walkNeeded, schemasQuery.data, allView, selected, page, sortFieldRaw, sortOrderRaw, conflictedOnly]);
+
+  // --------------------------------------------------------------------
+  // Invalid `page` param -> rewrite it away (treat as page 1). Only fires on
+  // present-but-invalid values; an absent page is page 1 with no rewrite.
+  // Defined before stale-sort recovery so that on a simultaneous stale-sort
+  // 422 the sort rewrite (which also drops page) stays the final URL.
+  // --------------------------------------------------------------------
+  useEffect(() => {
+    if (pageRaw == null || pageParamValid) return;
+    const cleaned = new URLSearchParams(searchParams);
+    cleaned.delete("page");
+    const qs = cleaned.toString();
+    const base = allView ? "/content" : `/content/${encodeURIComponent(selected ?? "")}`;
+    navigate(qs ? `${base}?${qs}` : base, { replace: true });
+  }, [pageRaw, pageParamValid, searchParams, allView, selected, navigate]);
+
+  // --------------------------------------------------------------------
+  // Stale sort recovery (live listing path): a 422 stale-sort error rewrites
+  // the URL to drop sort — and with it the page, any page derived under a
+  // dead sort is meaningless (the walk path handles this failure itself).
+  // --------------------------------------------------------------------
+  useEffect(() => {
+    if (walkPending) return;
     if (!entriesIsError) return;
     if (!isStaleSortError(entriesError)) return;
 
@@ -197,9 +427,11 @@ export default function ContentPage() {
     const qs = cleaned.toString();
     const base = allView ? "/content" : `/content/${encodeURIComponent(selected ?? "")}`;
     navigate(qs ? `${base}?${qs}` : base, { replace: true });
-  }, [entriesIsError, entriesError, searchParams, allView, selected, navigate]);
+  }, [entriesIsError, entriesError, searchParams, allView, selected, navigate, walkPending]);
 
-  // ---- Pagination availability ----
+  // --------------------------------------------------------------------
+  // Pagination availability
+  // --------------------------------------------------------------------
   let hasNextPage: boolean;
   let hasPrevPage: boolean;
   let displayPage: number;
@@ -207,10 +439,10 @@ export default function ContentPage() {
   if (allView) {
     hasNextPage = hasNextLib(allViewState, allEntriesQuery.nextCursors);
     hasPrevPage = hasPrevLib(allViewState);
-    displayPage = allViewState.depth;
+    displayPage = page;
   } else {
     hasNextPage = pagination.nextCursor != null;
-    hasPrevPage = hasCursorState && pagination.prevCursor != null;
+    hasPrevPage = page > 1 && singleAnchor != null && pagination.prevCursor != null;
     displayPage = page;
   }
 
@@ -242,52 +474,53 @@ export default function ContentPage() {
     });
   }
 
+  function viewOptsForUrl() {
+    return {
+      allView,
+      selected,
+      conflictedOnly,
+      sortField: sortFieldRaw,
+      sortOrder: sortOrderRaw,
+    };
+  }
+
+  function navigateToPage(targetPage: number, paginationState: unknown) {
+    const state = { ...(stateRecord ?? {}) };
+    if (targetPage > 1) {
+      state.pagination = paginationState;
+    } else {
+      // Page 1 / depth 1 never carries position state.
+      delete state.pagination;
+    }
+    const nextState = Object.keys(state).length > 0 ? state : null;
+    navigate(buildPageUrl({ ...viewOptsForUrl(), targetPage }), { state: nextState });
+  }
+
   function goToNextPage() {
     if (allView) {
       if (!hasNextPage) return;
-      const nextState = advance(allViewState, allEntriesQuery.nextCursors);
-      navigate(buildAllViewPageUrl({
-        conflictedOnly,
-        allviewState: encodeState(nextState),
-        sortField: sortFieldRaw,
-        sortOrder: sortOrderRaw,
-      }));
+      navigateToPage(
+        page + 1,
+        advance(allViewState, allEntriesQuery.nextCursors),
+      );
     } else {
       if (!hasNextPage || pagination.nextCursor == null) return;
-      navigate(
-        buildSingleSchemaPageUrl({
-          selected,
-          conflictedOnly,
-          targetPage: page + 1,
-          pagination: { limit: PAGE_LIMIT, cursor: pagination.nextCursor, direction: "forward" },
-          sortField: sortFieldRaw,
-          sortOrder: sortOrderRaw,
-        }),
-      );
+      navigateToPage(page + 1, { cursor: pagination.nextCursor, direction: "forward" });
     }
   }
 
   function goToPrevPage() {
     if (allView) {
       if (!hasPrevPage) return;
-      const prevState = retreat(allViewState, allEntriesQuery.prevCursors);
-      navigate(buildAllViewPageUrl({
-        conflictedOnly,
-        allviewState: encodeState(prevState),
-        sortField: sortFieldRaw,
-        sortOrder: sortOrderRaw,
-      }));
+      navigateToPage(
+        page - 1,
+        page - 1 === 1 ? undefined : retreat(allViewState, allEntriesQuery.prevCursors),
+      );
     } else {
       if (!hasPrevPage || pagination.prevCursor == null) return;
-      navigate(
-        buildSingleSchemaPageUrl({
-          selected,
-          conflictedOnly,
-          targetPage: page - 1,
-          pagination: { limit: PAGE_LIMIT, cursor: pagination.prevCursor, direction: "backward" },
-          sortField: sortFieldRaw,
-          sortOrder: sortOrderRaw,
-        }),
+      navigateToPage(
+        page - 1,
+        page - 1 === 1 ? undefined : { cursor: pagination.prevCursor, direction: "backward" },
       );
     }
   }
@@ -361,11 +594,15 @@ export default function ContentPage() {
                 onValueChange={(value) => {
                   if (value == null) return;
                   // Reset pagination and sort on schema change
-                  const base = value === ALL_SCHEMAS_VALUE ? "/content" : `/content/${encodeURIComponent(value)}`;
-                  const params = new URLSearchParams();
-                  if (conflictedOnly) params.set("conflicted", "1");
-                  const qs = params.toString();
-                  navigate(qs ? `${base}?${qs}` : base);
+                  const targetAll = value === ALL_SCHEMAS_VALUE;
+                  navigate(
+                    buildPageUrl({
+                      allView: targetAll,
+                      selected: targetAll ? null : value,
+                      conflictedOnly,
+                      targetPage: 1,
+                    }),
+                  );
                 }}
               >
                 <SelectTrigger id="content-schema">
@@ -414,35 +651,35 @@ export default function ContentPage() {
 
               function handleSortChange(newValue: string | null) {
                 if (newValue == null) return;
-                const params = new URLSearchParams();
-                if (conflictedOnly) params.set("conflicted", "1");
-                // Preset options encode both field and order
-                if (newValue === "modified") {
-                  // Direction is controlled by the adjacent toggle, so preserve
-                  // the current sort order from the URL.
-                  params.set("sort_field", "modified");
-                  params.set("sort_order", sortOrder);
-                } else if (newValue === "date") {
-                  params.set("sort_field", "date");
-                  params.set("sort_order", "asc");
-                } else {
-                  // Custom field: use field id, default asc
-                  params.set("sort_field", newValue);
-                  params.set("sort_order", "asc");
-                }
-                const qs = params.toString();
-                navigate(`/content/${encodeURIComponent(selectedSchemaName)}?${qs}`);
+                // Reset pagination on sort change: any anchor derived under the
+                // previous sort is invalid, so pagination restarts at page 1.
+                // Preset options encode both field and order.
+                const order = newValue === "date" ? "asc" : newValue === "modified" ? sortOrder : "asc";
+                navigate(
+                  buildPageUrl({
+                    allView: false,
+                    selected: selectedSchemaName,
+                    conflictedOnly,
+                    targetPage: 1,
+                    sortField: newValue,
+                    sortOrder: order,
+                  }),
+                );
               }
 
               function handleSortOrderToggle() {
+                // Reset pagination; normalize the legacy "id" token on rewrite.
                 const newOrder = sortOrder === "asc" ? "desc" : "asc";
-                const params = new URLSearchParams();
-                if (conflictedOnly) params.set("conflicted", "1");
-                // Normalize the legacy "id" token to "modified" on rewrite.
-                params.set("sort_field", sortField === "id" ? "modified" : sortField);
-                params.set("sort_order", newOrder);
-                const qs = params.toString();
-                navigate(`/content/${encodeURIComponent(selectedSchemaName)}?${qs}`);
+                navigate(
+                  buildPageUrl({
+                    allView: false,
+                    selected: selectedSchemaName,
+                    conflictedOnly,
+                    targetPage: 1,
+                    sortField: sortField === "id" ? "modified" : sortField,
+                    sortOrder: newOrder,
+                  }),
+                );
               }
 
               // Derive select value from current URL sort state. Both the
@@ -460,7 +697,7 @@ export default function ContentPage() {
                 : selectValue === "date" ? "Creation date"
                 : sortableFields.find((f) => String(f.id) === selectValue)
                   ? `${sortableFields.find((f) => String(f.id) === selectValue)!.label} (${sortableFields.find((f) => String(f.id) === selectValue)!.type})`
-                : sortField;
+                  : sortField;
 
               return (
                 <div className="grid gap-1.5">
@@ -503,12 +740,8 @@ export default function ContentPage() {
               id="conflicted-only"
               checked={conflictedOnly}
               onCheckedChange={(checked) => {
-                // Reset pagination when toggling conflicted filter
-                const base = allView ? "/content" : `/content/${encodeURIComponent(selected ?? "")}`;
-                const params = new URLSearchParams();
-                if (checked) params.set("conflicted", "1");
-                const qs = params.toString();
-                navigate(qs ? `${base}?${qs}` : base);
+                // Reset pagination (and sort) on conflicted-filter change
+                navigate(buildPageUrl({ allView, selected, conflictedOnly: checked, targetPage: 1 }));
               }}
             />
             <Label htmlFor="conflicted-only" className="cursor-pointer font-normal">
@@ -518,7 +751,7 @@ export default function ContentPage() {
         </div>
       )}
 
-      {schemas.length > 0 && entriesIsPending && (
+      {schemas.length > 0 && (entriesIsPending || walkPending) && (
         <ul className="space-y-2">
           {Array.from({ length: 3 }, (_, index) => (
             <li key={index}>
@@ -528,7 +761,7 @@ export default function ContentPage() {
         </ul>
       )}
 
-      {schemas.length > 0 && entriesIsError && (
+      {schemas.length > 0 && entriesIsError && !walkPending && (
         <Alert variant="destructive">
           <AlertTitle>Could not load entries</AlertTitle>
           <AlertDescription>{errorMessage(entriesError) ?? "Unknown error"}</AlertDescription>
@@ -538,7 +771,7 @@ export default function ContentPage() {
         </Alert>
       )}
 
-      {schemas.length > 0 && !entriesIsPending && !entriesIsError && entries.length === 0 && (
+      {schemas.length > 0 && !entriesIsPending && !entriesIsError && !walkPending && entries.length === 0 && (
         <Alert>
           <AlertTitle>{conflictedOnly ? "No conflicted entries" : "No entries yet"}</AlertTitle>
           <AlertDescription>
@@ -549,7 +782,7 @@ export default function ContentPage() {
         </Alert>
       )}
 
-      {schemas.length > 0 && !entriesIsPending && !entriesIsError && entries.length > 0 && (
+      {schemas.length > 0 && !entriesIsPending && !entriesIsError && !walkPending && entries.length > 0 && (
         <>
           <ul className="divide-y overflow-hidden rounded-xl border bg-card">
             {entries.map((entry) => {

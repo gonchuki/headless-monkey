@@ -44,12 +44,11 @@ describe("isStaleSortError", () => {
 });
 
 describe("dropSortParams", () => {
-  it("drops both sort keys while preserving other params", () => {
+  it("drops sort keys and page while preserving other params", () => {
     const params = new URLSearchParams({
       sort_field: "42",
       sort_order: "desc",
       conflicted: "1",
-      cursor_next: "abc",
       page: "2",
     });
 
@@ -59,8 +58,9 @@ describe("dropSortParams", () => {
     expect(result!.get("sort_field")).toBeNull();
     expect(result!.get("sort_order")).toBeNull();
     expect(result!.get("conflicted")).toBe("1");
-    expect(result!.get("cursor_next")).toBe("abc");
-    expect(result!.get("page")).toBe("2");
+    // A page derived under a dead sort is meaningless — pagination restarts
+    // at page 1, so page is dropped along with the sort keys.
+    expect(result!.get("page")).toBeNull();
   });
 
   it("returns null when no sort param is present", () => {
@@ -69,11 +69,12 @@ describe("dropSortParams", () => {
   });
 
   it("never mutates its input", () => {
-    const params = new URLSearchParams({ sort_field: "42", sort_order: "desc" });
+    const params = new URLSearchParams({ sort_field: "42", sort_order: "desc", page: "3" });
     dropSortParams(params);
 
     expect(params.get("sort_field")).toBe("42");
     expect(params.get("sort_order")).toBe("desc");
+    expect(params.get("page")).toBe("3");
   });
 
   it("handles only sort_field present", () => {
@@ -82,7 +83,7 @@ describe("dropSortParams", () => {
 
     expect(result).not.toBeNull();
     expect(result!.get("sort_field")).toBeNull();
-    expect(result!.get("page")).toBe("1");
+    expect(result!.get("page")).toBeNull();
   });
 
   it("handles only sort_order present", () => {
