@@ -9,6 +9,7 @@ import { EventsEmitter } from "./services/events";
 import { createAuthRouter } from "./routes/auth";
 import { createUsersRouter } from "./routes/users";
 import { createContentRouter } from "./routes/content";
+import { createAllContentRouter } from "./routes/contentAll";
 import { ContentService } from "./services/contentService";
 import { requireAuth, requireRole } from "./auth/requireAuth";
 
@@ -46,6 +47,11 @@ export function createApp(db?: Db): express.Express {
   // Public data API — no auth (R20)
   const contentRouter = createContentRouter(contentService);
   app.use("/api/content", contentRouter);
+
+  // Editor-authenticated global listing — the index route only; the public
+  // router above stays first (its /:schema routes never match the bare index)
+  const allContentRouter = createAllContentRouter(contentService, requireAuth, requireRole);
+  app.use("/api/content", allContentRouter);
 
   // Users routes — admin only
   const usersRouter = createUsersRouter(database);

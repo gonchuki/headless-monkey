@@ -12,22 +12,29 @@ export function useDeleteEntry() {
       apiFetch<void>(`/api/entries/${vars.id}`, { method: "DELETE" }),
     onMutate: async (vars) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.entries(vars.schema) });
+      await queryClient.cancelQueries({ queryKey: queryKeys.allEntries() });
 
-      // Optimistically remove from every cached query under the entries prefix.
-      // Handles both flat list (ContentListEntry[]) and paginated ({ entries, pagination }) shapes.
-      const previous = queryClient.setQueriesData(
-        { queryKey: queryKeys.entries(vars.schema) },
-        (old: ContentListEntry[] | { entries: ContentListEntry[]; pagination: unknown } | undefined) => {
-          if (!old) return old;
-          if (Array.isArray(old)) {
-            return old.filter((entry) => entry.id !== vars.id);
-          }
-          if ("entries" in old) {
-            return { ...old, entries: old.entries.filter((entry) => entry.id !== vars.id) };
-          }
-          return old;
-        },
-      );
+      // Optimistically remove from every cached query under the entries
+      // prefix — both the deleted entry's own schema family and the global
+      // all-schemas family. Handles both flat list (ContentListEntry[]) and
+      // paginated ({ entries, pagination }) shapes. Cursors in the global
+      // family go stale but the onSettled invalidation heals them.
+      const removeEntry = (
+        old: ContentListEntry[] | { entries: ContentListEntry[]; pagination: unknown } | undefined
+      ) => {
+        if (!old) return old;
+        if (Array.isArray(old)) {
+          return old.filter((entry) => entry.id !== vars.id);
+        }
+        if ("entries" in old) {
+          return { ...old, entries: old.entries.filter((entry) => entry.id !== vars.id) };
+        }
+        return old;
+      };
+      const previous = [
+        ...queryClient.setQueriesData({ queryKey: queryKeys.entries(vars.schema) }, removeEntry),
+        ...queryClient.setQueriesData({ queryKey: queryKeys.allEntries() }, removeEntry),
+      ];
 
       return { previous };
     },
@@ -41,6 +48,7 @@ export function useDeleteEntry() {
     },
     onSettled: (_data, _error, vars) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.entries(vars.schema) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.allEntries() });
     },
   });
 }

@@ -168,6 +168,10 @@ export class ContentService {
   listForSchema(schemaName: string): ContentListEntry[];
   listForSchema(
     schemaName: string,
+    conflictedOnly: boolean
+  ): ContentListEntry[];
+  listForSchema(
+    schemaName: string,
     pagination: PaginationParams,
     sort?: SortParams,
     conflictedOnly?: boolean
@@ -230,6 +234,74 @@ export class ContentService {
     return this.repo
       .listEntries(schemaName, resolvedSort, undefined, maxVersion)
       .map((entry) => this.toEntry(entry, schema, true, "editor"));
+  }
+
+  /**
+   * Globally merged listing across ALL schemas (the `GET /api/content` index
+   * route). Editor shape, default `modified desc` order with the id tiebreak —
+   * no sort params. `conflictedOnly` filters at the repo level (before
+   * pagination), comparing each entry against its OWN schema's
+   * `compat_version`.
+   */
+  listAll(): ContentListEntry[];
+  listAll(conflictedOnly: boolean): ContentListEntry[];
+  listAll(
+    pagination: PaginationParams,
+    conflictedOnly?: boolean
+  ): { entries: ContentListEntry[]; pagination: PaginationResponse };
+  listAll(
+    arg1?: PaginationParams | boolean,
+    arg2?: boolean
+  ):
+    | ContentListEntry[]
+    | { entries: ContentListEntry[]; pagination: PaginationResponse } {
+    const pagination =
+      arg1 !== undefined && typeof arg1 !== "boolean" ? arg1 : undefined;
+    const conflictedOnly =
+      typeof arg1 === "boolean" ? arg1 : (arg2 ?? false);
+    if (pagination !== undefined) {
+      const result = this.repo.listAllEntriesPaginated(pagination, undefined, conflictedOnly);
+      return {
+        entries: this.toEditorEntries(result.entries),
+        pagination: result.pagination,
+      };
+    }
+    return this.toEditorEntries(this.repo.listAllEntries(conflictedOnly));
+  }
+
+  /**
+   * Map globally-fetched rows to editor-shape entries, resolving each row's
+   * OWN schema (values/references only key correctly against that schema's
+   * field set). Schemas are resolved once per distinct name in the page.
+   */
+  private toEditorEntries(rows: ContentEntryRow[]): ContentListEntry[] {
+    const names = [...new Set(rows.map((row) => row.record.schema))];
+    const schemasByName = new Map<string, SchemaEntry>();
+    if (names.length > 0) {
+      const metadata = this.schemaRepo.listSchemas();
+      const fieldsByName = this.schemaRepo.getFieldsForSchemas(names);
+      for (const meta of metadata) {
+        if (!names.includes(meta.name)) continue;
+        schemasByName.set(meta.name, {
+          name: meta.name,
+          version: meta.version,
+          compat_version: meta.compat_version,
+          creation_date: meta.creation_date,
+          created_by: meta.created_by,
+          last_modified_date: meta.last_modified_date,
+          last_modified_by: meta.last_modified_by,
+          fields: fieldsByName.get(meta.name) ?? [],
+        });
+      }
+    }
+    return rows.map((row) => {
+      const schema = schemasByName.get(row.record.schema);
+      if (!schema) {
+        // Unreachable: every content row names an existing schema (FK).
+        throw new ContentServiceError(500, `Schema '${row.record.schema}' not found`);
+      }
+      return this.toEntry(row, schema, true, "editor");
+    });
   }
 
   listPublic(schemaName: string): ContentEntry[];

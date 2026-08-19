@@ -22,13 +22,10 @@ export interface PaginatedEntries {
 }
 
 /**
- * Pagination params as carried by one entries list request.
- *
- * `direction` is intentionally a plain string: single-schema requests use the
- * wire tokens `"forward"`/`"backward"` (see `PaginationParams`), while the
- * all-view state machine uses `"fwd"`/`"bwd"`. Values are carried verbatim
- * into both the query key and the URL, preserving each caller's historical
- * request byte-for-byte.
+ * Pagination params as carried by one entries list request. Direction tokens
+ * on the wire are the canonical `"forward"`/`"backward"` only (see
+ * `PaginationParams`); they are carried verbatim into both the query key and
+ * the URL.
  */
 export interface EntriesPagination {
   /** Without `limit` the server returns all rows flat (no cursors). */
@@ -40,10 +37,11 @@ export interface EntriesPagination {
 /**
  * One entries list request: query key, fetch function, and list URL.
  *
- * Every caller that reads the content listing — the single-schema hook, the
- * all-view per-schema hook, and the page-reconstruction walk — builds its
- * request here so that identical params always produce identical query keys
- * and hit the same list URL (and therefore the same cache entry).
+ * Every caller that reads a single-schema listing — the `useEntries` hook and
+ * the page-reconstruction walk — builds its request here so that identical
+ * params always produce identical query keys and hit the same list URL (and
+ * therefore the same cache entry). The all-view equivalent is
+ * {@link buildAllEntriesRequest}.
  */
 export interface EntriesRequest {
   schema: string;
@@ -52,38 +50,28 @@ export interface EntriesRequest {
   /** Sort is single-schema only; omitted for all-view requests. */
   sort?: SortParams;
   conflicted: boolean;
-  /** All-view marker: no sort params, and the `allView` key shape. */
-  allView?: boolean;
 }
 
 /**
  * Build the query key + fetch function for one schema-entries request.
- * `queryKey` mirrors the historical key shapes exactly (single-schema keys
- * nest `{ pagination }`/`{ sort }`, all-view keys carry
- * `{ allView, cursor, direction, conflicted }`) so cache behavior is unchanged.
+ * `queryKey` mirrors the historical key shapes exactly (keys nest
+ * `{ pagination }`/`{ sort }`) so cache behavior is unchanged.
  */
-export function buildEntriesRequest({ schema, pagination, sort, conflicted, allView = false }: EntriesRequest): {
+export function buildEntriesRequest({ schema, pagination, sort, conflicted }: EntriesRequest): {
   queryKey: readonly unknown[];
   queryFn: () => Promise<PaginatedEntries | ContentListEntry[]>;
 } {
-  const queryKey = allView
-    ? ([
-        ...queryKeys.entries(schema),
-        { allView: true, cursor: pagination?.cursor, direction: pagination?.direction, conflicted },
-      ] as const)
-    : pagination
-      ? ([...queryKeys.entries(schema), { pagination }, { sort }, { conflicted }] as const)
-      : ([...queryKeys.entries(schema), { sort }, { conflicted }] as const);
+  const queryKey = pagination
+    ? ([...queryKeys.entries(schema), { pagination }, { sort }, { conflicted }] as const)
+    : ([...queryKeys.entries(schema), { sort }, { conflicted }] as const);
 
   const queryFn = () => {
     const params = new URLSearchParams();
     if (pagination?.limit != null) params.set("limit", String(pagination.limit));
     if (pagination?.cursor != null) params.set("cursor", String(pagination.cursor));
     if (pagination?.direction) params.set("direction", pagination.direction);
-    if (!allView) {
-      if (sort?.sortField) params.set("sort_field", sort.sortField);
-      if (sort?.sortOrder) params.set("sort_order", sort.sortOrder);
-    }
+    if (sort?.sortField) params.set("sort_field", sort.sortField);
+    if (sort?.sortOrder) params.set("sort_order", sort.sortOrder);
     if (conflicted) params.set("conflicted", "1");
     const qs = params.toString();
     const url = `/api/schemas/${encodeURIComponent(schema)}/entries${qs ? `?${qs}` : ""}`;
@@ -91,6 +79,41 @@ export function buildEntriesRequest({ schema, pagination, sort, conflicted, allV
       return apiFetch<PaginatedEntries>(url);
     }
     return apiFetch<ContentListEntry[]>(url);
+  };
+
+  return { queryKey, queryFn };
+}
+
+/**
+ * One global (all-schemas) listing request against `GET /api/content`:
+ * query key + fetch function. The key is the `allEntries` family (object
+ * sentinel `{ view: "all" }`, so no schema name can collide) plus ONE stable
+ * params object. No sort params ever — server order is authoritative.
+ */
+export interface AllEntriesRequest {
+  limit?: number;
+  cursor?: string;
+  direction?: "forward" | "backward";
+  conflicted: boolean;
+}
+
+export function buildAllEntriesRequest({ limit, cursor, direction, conflicted }: AllEntriesRequest): {
+  queryKey: readonly unknown[];
+  queryFn: () => Promise<PaginatedEntries>;
+} {
+  const queryKey = [
+    ...queryKeys.allEntries(),
+    { limit, cursor, direction, conflicted },
+  ] as const;
+
+  const queryFn = () => {
+    const params = new URLSearchParams();
+    if (limit != null) params.set("limit", String(limit));
+    if (cursor != null) params.set("cursor", cursor);
+    if (direction) params.set("direction", direction);
+    if (conflicted) params.set("conflicted", "1");
+    const qs = params.toString();
+    return apiFetch<PaginatedEntries>(`/api/content${qs ? `?${qs}` : ""}`);
   };
 
   return { queryKey, queryFn };
