@@ -46,6 +46,19 @@ export interface ContentEntryRow {
   refs: ContentRef[];
 }
 
+/**
+ * A WHERE scope for a content listing: the SQL fragment that goes after
+ * `WHERE ` plus its bind params. Per-schema listings scope to
+ * `content.schema = ?` (+ version filter); the global all-schemas listing
+ * scopes to `1 = 1` or the cross-schema conflict expression. The keyset
+ * condition is always appended after the scope, so the scope's params must
+ * come first in every bind list.
+ */
+interface Scope {
+  sql: string;
+  params: unknown[];
+}
+
 export class ContentRepository {
   constructor(private db: Db) {}
 
@@ -190,6 +203,211 @@ export class ContentRepository {
       )
       .all(schema, ...versionParams) as ContentRecord[];
 
+    return this.hydrate(records);
+  }
+
+  /**
+   * Globally ordered listing across ALL schemas (no `content.schema` clause).
+   * Always the default `modified desc` order with the id tiebreak — sorting
+   * stays single-schema-only. When `conflictedOnly` is set, each entry is
+   * compared against its OWN schema's `compat_version` (a flat min/max number
+   * cannot express that cross-schema comparison).
+   */
+  listAllEntries(conflictedOnly?: boolean): ContentEntryRow[] {
+    const scope = this.scopeForAll(conflictedOnly);
+    const resolvedSort = { sortField: "modified", sortOrder: "desc" } as const;
+    const orderClause = this.buildOrderClause(resolvedSort);
+
+    const records = this.db
+      .prepare(
+        `SELECT content.id, content.schema, content.schema_version, content.creation_date, content.created_by, content.last_modified_date, content.last_modified_by, (SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count FROM content WHERE ${scope.sql} ${orderClause}`
+      )
+      .all(...scope.params) as ContentRecord[];
+
+    return this.hydrate(records);
+  }
+
+  /**
+   * Cursor-based paginated variant of {@link listEntries}.
+   * Keyset pagination on the sort column with `content.id` as tiebreak: the
+   * cursor is an opaque string encoding the anchor row's (sort value, id).
+   * Fetches `limit + 1` rows to detect whether more data exists; the extra
+   * probe row is removed before returning.
+   */
+  listEntriesPaginated(
+    schema: string,
+    pagination: PaginationParams,
+    sort?: ResolvedSortParams,
+    minVersion?: number,
+    maxVersion?: number
+  ): { entries: ContentEntryRow[]; pagination: PaginationResponse } {
+    return this.listEntriesPaginatedCore(
+      pagination,
+      sort,
+      this.scopeForSchema(schema, minVersion, maxVersion)
+    );
+  }
+
+  /**
+   * Globally keyset-paginated listing across ALL schemas (the `GET
+   * /api/content` index route). Same keyset/cursor semantics as
+   * {@link listEntriesPaginated} but without a `content.schema` clause; when
+   * `conflictedOnly` is set the version filter compares each entry against
+   * its OWN schema's `compat_version`.
+   */
+  listAllEntriesPaginated(
+    pagination: PaginationParams,
+    sort?: ResolvedSortParams,
+    conflictedOnly?: boolean
+  ): { entries: ContentEntryRow[]; pagination: PaginationResponse } {
+    return this.listEntriesPaginatedCore(pagination, sort, this.scopeForAll(conflictedOnly));
+  }
+
+  entryExistsInSchema(id: number, schema: string): boolean {
+    return (
+      this.db
+        .prepare("SELECT 1 FROM content WHERE id = ? AND schema = ?")
+        .get(id, schema) !== undefined
+    );
+  }
+
+  countBySchema(schemaName: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS count FROM content WHERE schema = ?")
+      .get(schemaName) as { count: number };
+    return row.count;
+  }
+
+  /** The per-schema WHERE scope: `content.schema = ?` plus the version filter. */
+  private scopeForSchema(
+    schema: string,
+    minVersion?: number,
+    maxVersion?: number
+  ): Scope {
+    return {
+      sql: `content.schema = ?${buildVersionFilter(minVersion, maxVersion)}`,
+      params: [schema, ...buildVersionParams(minVersion, maxVersion)],
+    };
+  }
+
+  /**
+   * The global (all-schemas) WHERE scope. `1 = 1` when unfiltered; the
+   * cross-schema conflict expression when `conflictedOnly` — each entry
+   * compared against its own schema's `compat_version`.
+   */
+  private scopeForAll(conflictedOnly?: boolean): Scope {
+    if (conflictedOnly) {
+      return {
+        sql: "content.schema_version < (SELECT compat_version FROM schemas WHERE name = content.schema)",
+        params: [],
+      };
+    }
+    return { sql: "1 = 1", params: [] };
+  }
+
+  /**
+   * Shared keyset-pagination core. Runs the same first-page / forward /
+   * backward fetch + cursor probes for any WHERE scope, so the per-schema and
+   * global listings share one implementation (and therefore identical cursor
+   * semantics). The scope's SQL is the only thing that varies; the keyset
+   * condition is always appended after it.
+   */
+  private listEntriesPaginatedCore(
+    pagination: PaginationParams,
+    sort: ResolvedSortParams | undefined,
+    scope: Scope
+  ): { entries: ContentEntryRow[]; pagination: PaginationResponse } {
+    const limit = clampLimit(pagination.limit);
+    const direction = pagination.direction === "backward" ? "backward" : "forward";
+
+    const resolvedSort = sort ?? { sortField: "modified", sortOrder: "desc" };
+    const joinClause = this.buildJoinClause(resolvedSort);
+    const col = this.buildSortColumn(resolvedSort);
+    const orderClause = this.buildOrderClause(resolvedSort);
+
+    // Decode the cursor. An undecodable cursor, or one that does not match
+    // this sort (e.g. a legacy bare-id cursor on a field sort), is treated as
+    // "no cursor" / first page — lenient, as before.
+    let anchor: DecodedCursor | null = null;
+    if (pagination.cursor !== undefined && pagination.cursor !== null) {
+      const decoded = parseCursor(pagination.cursor);
+      if (decoded !== null && this.cursorMatchesSort(decoded, resolvedSort)) {
+        anchor = decoded;
+      }
+    }
+
+    // The paginated SELECT also returns the sort column's value per row so
+    // cursors can be generated from the first/last rows of the page.
+    const SELECT =
+      "SELECT content.id, content.schema, content.schema_version, content.creation_date, content.created_by, content.last_modified_date, content.last_modified_by, " +
+      (typeof resolvedSort.sortField === "number" ? "sort_field.value AS sort_value, " : "") +
+      "(SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count " +
+      "FROM content" +
+      joinClause;
+
+    type PageRecord = ContentRecord & { sort_value?: string | null };
+    let records: PageRecord[];
+    let hasMore = false;
+
+    if (anchor !== null && direction === "backward") {
+      // Backward: fetch entries "before" the anchor in display order, using
+      // the exact reverse of the display ORDER BY, then reverse to restore
+      // display order. The probe row (if any) is last in reverse display
+      // order, so it is removed BEFORE reversing.
+      const cond = this.buildKeysetCondition(col, resolvedSort, "backward", anchor);
+      const reverseOrder = this.buildOrderClause(resolvedSort, true);
+      records = this.db
+        .prepare(`${SELECT} WHERE ${scope.sql} AND ${cond.sql} ${reverseOrder} LIMIT ?`)
+        .all(...scope.params, ...cond.params, limit + 1) as PageRecord[];
+      hasMore = records.length > limit;
+      if (hasMore) records.pop(); // remove the extra probe row
+      records.reverse(); // restore display order
+    } else if (anchor !== null && direction === "forward") {
+      // Forward: fetch entries "after" the anchor in display order.
+      const cond = this.buildKeysetCondition(col, resolvedSort, "forward", anchor);
+      records = this.db
+        .prepare(`${SELECT} WHERE ${scope.sql} AND ${cond.sql} ${orderClause} LIMIT ?`)
+        .all(...scope.params, ...cond.params, limit + 1) as PageRecord[];
+      hasMore = records.length > limit;
+      if (hasMore) records.pop(); // remove the extra probe row
+    } else {
+      records = this.db
+        .prepare(`${SELECT} WHERE ${scope.sql} ${orderClause} LIMIT ?`)
+        .all(...scope.params, limit + 1) as PageRecord[];
+      hasMore = records.length > limit;
+      if (hasMore) records.pop(); // remove the extra probe row
+    }
+
+    if (records.length === 0) {
+      return { entries: [], pagination: { nextCursor: null, prevCursor: null } };
+    }
+
+    const entries = this.hydrate(records);
+
+    // Cursor existence probes agree with the keyset semantics: null exactly
+    // when no rows remain in that direction.
+    const firstAnchor = this.anchorOf(records[0], resolvedSort);
+    const lastAnchor = this.anchorOf(records[records.length - 1], resolvedSort);
+    const nextExists =
+      direction === "backward"
+        ? this.probeExists(scope, col, resolvedSort, "forward", lastAnchor)
+        : hasMore;
+    const prevExists =
+      anchor !== null && this.probeExists(scope, col, resolvedSort, "backward", firstAnchor);
+
+    const paginationResult: PaginationResponse = {
+      nextCursor: nextExists ? encodeCursor(lastAnchor.value, lastAnchor.id) : null,
+      prevCursor: prevExists ? encodeCursor(firstAnchor.value, firstAnchor.id) : null,
+    };
+
+    return { entries, pagination: paginationResult };
+  }
+
+  /**
+   * Batch-fetch the scalar rows and schema-ref edges for a set of records and
+   * group them per content id, preserving (content_id, field_id) order.
+   */
+  private hydrate(records: ContentRecord[]): ContentEntryRow[] {
     if (records.length === 0) return [];
 
     const ids = records.map((r) => r.id);
@@ -232,156 +450,21 @@ export class ContentRepository {
     }));
   }
 
-  /**
-   * Cursor-based paginated variant of {@link listEntries}.
-   * Keyset pagination on the sort column with `content.id` as tiebreak: the
-   * cursor is an opaque string encoding the anchor row's (sort value, id).
-   * Fetches `limit + 1` rows to detect whether more data exists; the extra
-   * probe row is removed before returning.
-   */
-  listEntriesPaginated(
-    schema: string,
-    pagination: PaginationParams,
-    sort?: ResolvedSortParams,
-    minVersion?: number,
-    maxVersion?: number
-  ): { entries: ContentEntryRow[]; pagination: PaginationResponse } {
-    const limit = clampLimit(pagination.limit);
-    const direction = pagination.direction === "backward" ? "backward" : "forward";
-
-    const resolvedSort = sort ?? { sortField: "modified", sortOrder: "desc" };
-    const joinClause = this.buildJoinClause(resolvedSort);
-    const col = this.buildSortColumn(resolvedSort);
-    const orderClause = this.buildOrderClause(resolvedSort);
-
-    // Decode the cursor. An undecodable cursor, or one that does not match
-    // this sort (e.g. a legacy bare-id cursor on a field sort), is treated as
-    // "no cursor" / first page — lenient, as before.
-    let anchor: DecodedCursor | null = null;
-    if (pagination.cursor !== undefined && pagination.cursor !== null) {
-      const decoded = parseCursor(pagination.cursor);
-      if (decoded !== null && this.cursorMatchesSort(decoded, resolvedSort)) {
-        anchor = decoded;
-      }
-    }
-
-    // The paginated SELECT also returns the sort column's value per row so
-    // cursors can be generated from the first/last rows of the page.
-    const SELECT =
-      "SELECT content.id, content.schema, content.schema_version, content.creation_date, content.created_by, content.last_modified_date, content.last_modified_by, " +
-      (typeof resolvedSort.sortField === "number" ? "sort_field.value AS sort_value, " : "") +
-      "(SELECT COUNT(DISTINCT content_id) FROM content_refs WHERE target_content_id = content.id) AS referencer_count " +
-      "FROM content" +
-      joinClause;
-
-    type PageRecord = ContentRecord & { sort_value?: string | null };
-    let records: PageRecord[];
-    let hasMore = false;
-
-    const versionFilter = buildVersionFilter(minVersion, maxVersion);
-    const versionParams = buildVersionParams(minVersion, maxVersion);
-
-    if (anchor !== null && direction === "backward") {
-      // Backward: fetch entries "before" the anchor in display order, using
-      // the exact reverse of the display ORDER BY, then reverse to restore
-      // display order. The probe row (if any) is last in reverse display
-      // order, so it is removed BEFORE reversing.
-      const cond = this.buildKeysetCondition(col, resolvedSort, "backward", anchor);
-      const reverseOrder = this.buildOrderClause(resolvedSort, true);
-      records = this.db
-        .prepare(`${SELECT} WHERE content.schema = ?${versionFilter} AND ${cond.sql} ${reverseOrder} LIMIT ?`)
-        .all(schema, ...versionParams, ...cond.params, limit + 1) as PageRecord[];
-      hasMore = records.length > limit;
-      if (hasMore) records.pop(); // remove the extra probe row
-      records.reverse(); // restore display order
-    } else if (anchor !== null && direction === "forward") {
-      // Forward: fetch entries "after" the anchor in display order.
-      const cond = this.buildKeysetCondition(col, resolvedSort, "forward", anchor);
-      records = this.db
-        .prepare(`${SELECT} WHERE content.schema = ?${versionFilter} AND ${cond.sql} ${orderClause} LIMIT ?`)
-        .all(schema, ...versionParams, ...cond.params, limit + 1) as PageRecord[];
-      hasMore = records.length > limit;
-      if (hasMore) records.pop(); // remove the extra probe row
-    } else {
-      records = this.db
-        .prepare(`${SELECT} WHERE content.schema = ?${versionFilter} ${orderClause} LIMIT ?`)
-        .all(schema, ...versionParams, limit + 1) as PageRecord[];
-      hasMore = records.length > limit;
-      if (hasMore) records.pop(); // remove the extra probe row
-    }
-
-    if (records.length === 0) {
-      return { entries: [], pagination: { nextCursor: null, prevCursor: null } };
-    }
-
-    // Batch-fetch rows and refs for the paginated record set.
-    const ids = records.map((r) => r.id);
-    const placeholders = ids.map(() => "?").join(",");
-
-    const allRows = this.db
-      .prepare(
-        `SELECT content_id, field_id, value FROM content_rows WHERE content_id IN (${placeholders}) ORDER BY content_id, field_id`
-      )
-      .all(...ids) as (ContentRow & { content_id: number })[];
-
-    const allRefs = this.db
-      .prepare(
-        `SELECT content_id, field_id, target_content_id FROM content_refs WHERE content_id IN (${placeholders}) ORDER BY content_id, field_id`
-      )
-      .all(...ids) as (ContentRef & { content_id: number })[];
-
-    const rowsByContentId = new Map<number, ContentRow[]>();
-    for (const row of allRows) {
-      const { content_id, ...rest } = row;
-      if (!rowsByContentId.has(content_id)) rowsByContentId.set(content_id, []);
-      rowsByContentId.get(content_id)!.push(rest);
-    }
-
-    const refsByContentId = new Map<number, ContentRef[]>();
-    for (const ref of allRefs) {
-      const { content_id, ...rest } = ref;
-      if (!refsByContentId.has(content_id)) refsByContentId.set(content_id, []);
-      refsByContentId.get(content_id)!.push(rest);
-    }
-
-    const entries = records.map((record) => ({
-      record,
-      rows: rowsByContentId.get(record.id) ?? [],
-      refs: refsByContentId.get(record.id) ?? [],
-    }));
-
-    // Cursor existence probes agree with the keyset semantics: null exactly
-    // when no rows remain in that direction.
-    const firstAnchor = this.anchorOf(records[0], resolvedSort);
-    const lastAnchor = this.anchorOf(records[records.length - 1], resolvedSort);
-    const nextExists =
-      direction === "backward"
-        ? this.keysetExists(col, resolvedSort, "forward", lastAnchor, schema, minVersion, maxVersion)
-        : hasMore;
-    const prevExists =
-      anchor !== null && this.keysetExists(col, resolvedSort, "backward", firstAnchor, schema, minVersion, maxVersion);
-
-    const paginationResult: PaginationResponse = {
-      nextCursor: nextExists ? encodeCursor(lastAnchor.value, lastAnchor.id) : null,
-      prevCursor: prevExists ? encodeCursor(firstAnchor.value, firstAnchor.id) : null,
-    };
-
-    return { entries, pagination: paginationResult };
-  }
-
-  entryExistsInSchema(id: number, schema: string): boolean {
-    return (
-      this.db
-        .prepare("SELECT 1 FROM content WHERE id = ? AND schema = ?")
-        .get(id, schema) !== undefined
-    );
-  }
-
-  countBySchema(schemaName: string): number {
+  /** Keyset-semantics existence probe: is there any row in that direction? */
+  private probeExists(
+    scope: Scope,
+    col: { expr: string; nullable: boolean },
+    sort: ResolvedSortParams,
+    direction: "forward" | "backward",
+    anchor: DecodedCursor
+  ): boolean {
+    const cond = this.buildKeysetCondition(col, sort, direction, anchor);
     const row = this.db
-      .prepare("SELECT COUNT(*) AS count FROM content WHERE schema = ?")
-      .get(schemaName) as { count: number };
-    return row.count;
+      .prepare(
+        `SELECT 1 FROM content${this.buildJoinClause(sort)} WHERE ${scope.sql} AND ${cond.sql} LIMIT 1`
+      )
+      .get(...scope.params, ...cond.params);
+    return row !== undefined;
   }
 
   /**
@@ -531,27 +614,6 @@ export class ContentRepository {
         return { value, id, legacy: false };
       }
     }
-  }
-
-  /** Keyset-semantics existence probe: is there any row in that direction? */
-  private keysetExists(
-    col: { expr: string; nullable: boolean },
-    sort: ResolvedSortParams,
-    direction: "forward" | "backward",
-    anchor: DecodedCursor,
-    schema: string,
-    minVersion?: number,
-    maxVersion?: number
-  ): boolean {
-    const cond = this.buildKeysetCondition(col, sort, direction, anchor);
-    const versionFilter = buildVersionFilter(minVersion, maxVersion);
-    const versionParams = buildVersionParams(minVersion, maxVersion);
-    const row = this.db
-      .prepare(
-        `SELECT 1 FROM content${this.buildJoinClause(sort)} WHERE content.schema = ?${versionFilter} AND ${cond.sql} LIMIT 1`
-      )
-      .get(schema, ...versionParams, ...cond.params);
-    return row !== undefined;
   }
 
   /** Build a LEFT JOIN clause for field-based sorting; empty for id/date sorts. */

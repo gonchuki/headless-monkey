@@ -26,6 +26,7 @@ import { useDeleteEntry } from "@/hooks/useEntryMutations";
 import { useAllEntries } from "@/hooks/useAllEntries";
 import { useEntries } from "@/hooks/useEntries";
 import {
+  buildAllEntriesRequest,
   buildEntriesRequest,
   type PaginationParams,
   type PaginatedEntries,
@@ -38,15 +39,6 @@ import { entryLabel, schemaLabelField } from "@/lib/entries";
 import { schemaColor } from "@/lib/schemaColors";
 import { cn } from "@/lib/utils";
 import { dropSortParams, isStaleSortError } from "@/lib/sortRecovery";
-import {
-  advance,
-  hasNext as hasNextLib,
-  hasPrev as hasPrevLib,
-  initialState,
-  isStuck,
-  retreat,
-  type AllViewState,
-} from "@/lib/allViewPagination";
 import { SchemaBadge } from "@/components/shared/SchemaBadge";
 import { Switch } from "@/components/ui/switch";
 
@@ -62,11 +54,12 @@ const PAGE_LIMIT = 50;
 const WALK_STEP_CAP = 20;
 
 /**
- * Single-schema pagination anchor carried in `location.state.pagination`:
- * the exact fetch params (minus limit) that produced the current page.
- * Page 1 never has a cursor, so the key is omitted entirely there.
+ * Pagination anchor carried in `location.state.pagination`, for BOTH views
+ * (single-schema and all-schemas): the exact fetch params (minus limit) that
+ * produced the current page. Page 1 never has a cursor, so the key is omitted
+ * entirely there.
  */
-interface SingleSchemaAnchor {
+interface PageAnchor {
   cursor?: string;
   direction?: "forward" | "backward";
 }
@@ -105,37 +98,12 @@ function buildListUrl(opts: {
   return buildPageUrl({ ...opts, targetPage: 1 });
 }
 
-/** Type guard for the single-schema anchor in `location.state`. */
-function isSingleSchemaAnchor(value: unknown): value is SingleSchemaAnchor {
+/** Type guard for the pagination anchor in `location.state` (both views). */
+function isPageAnchor(value: unknown): value is PageAnchor {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const v = value as Record<string, unknown>;
-  if ("depth" in v || "schemas" in v) return false; // AllViewState — different view
   if ("cursor" in v && typeof v.cursor !== "string") return false;
   if ("direction" in v && v.direction !== "forward" && v.direction !== "backward") return false;
-  return true;
-}
-
-/**
- * Type guard for all-view state in `location.state`, mirroring the state
- * machine's `AllViewState`/`SchemaPageState` shapes.
- */
-function isAllViewState(value: unknown): value is AllViewState {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const v = value as Record<string, unknown>;
-  if (typeof v.depth !== "number" || !Number.isInteger(v.depth) || v.depth < 1) return false;
-  if (typeof v.schemas !== "object" || v.schemas === null || Array.isArray(v.schemas)) return false;
-  for (const s of Object.values(v.schemas as Record<string, unknown>)) {
-    if (typeof s !== "object" || s === null || Array.isArray(s)) return false;
-    const so = s as Record<string, unknown>;
-    if ("cursor" in so && typeof so.cursor !== "string") return false;
-    if ("direction" in so && so.direction !== "fwd" && so.direction !== "bwd") return false;
-    if (
-      "stuckAt" in so &&
-      (typeof so.stuckAt !== "number" || !Number.isInteger(so.stuckAt) || (so.stuckAt as number) < 1)
-    ) {
-      return false;
-    }
-  }
   return true;
 }
 
@@ -173,35 +141,33 @@ export default function ContentPage() {
   const page = pageParamValid ? pageRawNumber : 1;
 
   // ---- Position (location.state.pagination) ----
-  // Single-schema: an anchor object; all-view: the AllViewState. Missing or
-  // mismatched state is never an error — the reconstruction walk handles it.
+  // Both views carry the same anchor shape. Missing or mismatched state is
+  // never an error — the reconstruction walk handles it.
   const stateRecord =
     location.state != null && typeof location.state === "object" && !Array.isArray(location.state)
       ? (location.state as Record<string, unknown>)
       : null;
   const rawPagination = stateRecord?.pagination;
 
-  const candidateAnchor = isSingleSchemaAnchor(rawPagination) ? rawPagination : null;
+  const candidateAnchor = isPageAnchor(rawPagination) ? rawPagination : null;
   // An anchor must actually carry a cursor (page 1 is implicitly anchored).
-  const singleAnchor: SingleSchemaAnchor | null =
-    !allView && candidateAnchor != null && candidateAnchor.cursor != null ? candidateAnchor : null;
-  const allViewAnchor = allView && isAllViewState(rawPagination) ? (rawPagination as AllViewState) : null;
-  const stateMatchesPage = allView ? allViewAnchor?.depth === page : singleAnchor != null;
+  const anchor: PageAnchor | null =
+    candidateAnchor != null && candidateAnchor.cursor != null ? candidateAnchor : null;
+  const stateMatchesPage = page === 1 || anchor != null;
 
-  const allViewState: AllViewState = allViewAnchor ?? initialState();
-
-  // Single-schema fetch params. Always include `limit` — including on the
-  // first page — so the server returns a bounded page with cursors. Page > 1
-  // adds the location-state anchor (the only remaining cursor source); while
-  // a walk is pending there is no anchor, so page-1 params are requested —
-  // the very key the walk's first step uses, so both coalesce into one fetch.
+  // Fetch params, built once for both views. Always include `limit` —
+  // including on the first page — so the server returns a bounded page with
+  // cursors. Page > 1 adds the location-state anchor (the only remaining
+  // cursor source); while a walk is pending there is no anchor, so page-1
+  // params are requested — the very key the walk's first step uses, so both
+  // coalesce into one fetch.
   const paginationParams: PaginationParams = { limit: PAGE_LIMIT };
-  if (!allView && page > 1 && singleAnchor != null) {
-    paginationParams.cursor = singleAnchor.cursor;
-    if (singleAnchor.direction != null) paginationParams.direction = singleAnchor.direction;
+  if (page > 1 && anchor != null) {
+    paginationParams.cursor = anchor.cursor;
+    if (anchor.direction != null) paginationParams.direction = anchor.direction;
   }
 
-  // Walk trigger: page/depth > 1 with no position state for this view/page.
+  // Walk trigger: page > 1 with no position state for this page.
   const walkNeeded = page > 1 && !stateMatchesPage;
 
   const listUrl = buildListUrl({ allView, selected, conflictedOnly, sortField: sortFieldRaw, sortOrder: sortOrderRaw });
@@ -217,13 +183,15 @@ export default function ContentPage() {
     conflictedOnly,
   );
 
-  // All-view entries: identical per-schema requests to the reconstruction
-  // walk, so walked pages are cache-warm for the interactive navigation.
+  // All-view entries: one global request, identical to the reconstruction
+  // walk's, so walked pages are cache-warm for the interactive navigation.
+  // Gated on the all-view and on loaded schemas so a fresh install shows
+  // "No schemas yet" rather than a stuck pending skeleton.
   const allEntriesQuery = useAllEntries(
-    allView ? schemas.map((schema) => schema.name) : [],
-    allViewState,
     PAGE_LIMIT,
     conflictedOnly,
+    anchor ?? undefined,
+    allView && schemas.length > 0,
   );
 
   let entries: ContentListEntry[];
@@ -234,8 +202,8 @@ export default function ContentPage() {
   let entriesRefetch: () => Promise<void>;
 
   if (allView) {
-    entries = allEntriesQuery.data;
-    pagination = { nextCursor: null, prevCursor: null };
+    entries = allEntriesQuery.entries;
+    pagination = allEntriesQuery.pagination;
     entriesIsPending = allEntriesQuery.isPending;
     entriesIsError = allEntriesQuery.isError;
     entriesError = allEntriesQuery.error;
@@ -261,7 +229,10 @@ export default function ContentPage() {
   // --------------------------------------------------------------------
   useEffect(() => {
     if (!walkNeeded) return;
-    if (schemasQuery.isPending || schemasQuery.data == null) return; // all-view needs the schema list
+    // The single-schema walk waits for the schema list (the not-found check
+    // renders first); the all-view walk does not — the server lists
+    // everything.
+    if (!allView && (schemasQuery.isPending || schemasQuery.data == null)) return;
 
     const urlOpts = {
       allView,
@@ -271,7 +242,6 @@ export default function ContentPage() {
       sortOrder: sortOrderRaw,
     };
     const base = allView ? "/content" : `/content/${encodeURIComponent(selected ?? "")}`;
-    const schemaNames = schemasQuery.data.map((schema) => schema.name);
 
     let disposed = false;
     setWalkPending(true);
@@ -315,73 +285,46 @@ export default function ContentPage() {
       setWalkPending(false);
     };
 
-    // ---- single-schema walk: fetch pages 1..target forward ----
-    async function walkSingle() {
-      for (let step = 1, cursor: string | undefined = undefined, anchor: SingleSchemaAnchor = {}; step <= Math.min(page, WALK_STEP_CAP); step++) {
+    // ---- unified forward walk: fetch pages 1..target ----
+    // Parameterized only by which request builder feeds it (all-view:
+    // `buildAllEntriesRequest`, no sort; single-schema: `buildEntriesRequest`
+    // with `sort`). The walk's fetches use the SAME builders — and therefore
+    // the SAME query keys — as the interactive hooks, so walked pages are
+    // cache-warm on render.
+    async function walk() {
+      for (let step = 1, cursor: string | undefined = undefined, pageAnchor: PageAnchor = {}; step <= Math.min(page, WALK_STEP_CAP); step++) {
         const pagination: PaginationParams = { limit: PAGE_LIMIT };
         if (cursor != null) {
           pagination.cursor = cursor;
           pagination.direction = "forward";
         }
-        const config = buildEntriesRequest({ schema: selected!, conflicted: conflictedOnly, sort, pagination });
+        const config = allView
+          ? buildAllEntriesRequest({
+              limit: pagination.limit,
+              cursor: pagination.cursor,
+              direction: pagination.direction,
+              conflicted: conflictedOnly,
+            })
+          : buildEntriesRequest({ schema: selected!, conflicted: conflictedOnly, sort, pagination });
         const data = (await queryClient.fetchQuery({ queryKey: config.queryKey, queryFn: config.queryFn })) as PaginatedEntries;
         if (disposed) return;
-        anchor = cursor != null ? { cursor, direction: "forward" } : {};
+        pageAnchor = cursor != null ? { cursor, direction: "forward" } : {};
         cursor = data.pagination.nextCursor ?? undefined;
         const reached = step;
         if (cursor == null) {
-          finish(reached, reached === 1 ? null : anchor); // exhausted — reached is the last real page
+          finish(reached, reached === 1 ? null : pageAnchor); // exhausted — reached is the last real page
           return;
         }
         if (step === page || step === WALK_STEP_CAP) {
-          finish(reached, anchor); // target reached or cap hit
+          finish(reached, pageAnchor); // target reached or cap hit
           return;
         }
-      }
-    }
-
-    // ---- all-view walk: replay the per-schema state machine per depth ----
-    async function walkAll() {
-      let state = initialState();
-      const maxDepth = Math.min(page, WALK_STEP_CAP);
-      for (let depth = 1; depth <= maxDepth; depth++) {
-        const visible = schemaNames.filter((name) => !isStuck(state, name));
-        const configs = visible.map((name) => {
-          const pageState = state.schemas[name];
-          const config = buildEntriesRequest({
-            schema: name,
-            allView: true,
-            conflicted: conflictedOnly,
-            pagination: { limit: PAGE_LIMIT, cursor: pageState?.cursor, direction: pageState?.direction },
-          });
-          return { schema: name, queryKey: config.queryKey, queryFn: config.queryFn };
-        });
-        const cursors: Record<string, string | null> = {};
-        for (const config of configs) {
-          const data = (await queryClient.fetchQuery({ queryKey: config.queryKey, queryFn: config.queryFn })) as PaginatedEntries;
-          if (disposed) return;
-          cursors[config.schema] = data.pagination?.nextCursor ?? null;
-        }
-        if (disposed) return;
-        if (!hasNextLib(state, cursors)) {
-          // Exhausted: `depth` is the last real page.
-          finish(state.depth, state);
-          return;
-        }
-        if (depth === page || depth === maxDepth) {
-          // Target reached (or cap hit) — carry exactly the state that
-          // produced the page-`depth` fetches.
-          finish(state.depth, state);
-          return;
-        }
-        state = advance(state, cursors);
       }
     }
 
     (async () => {
       try {
-        if (allView) await walkAll();
-        else await walkSingle();
+        await walk();
       } catch (error) {
         fail(error);
       }
@@ -430,21 +373,12 @@ export default function ContentPage() {
   }, [entriesIsError, entriesError, searchParams, allView, selected, navigate, walkPending]);
 
   // --------------------------------------------------------------------
-  // Pagination availability
+  // Pagination availability — both views read the same single `pagination`
+  // response (the server's cursors are authoritative for either).
   // --------------------------------------------------------------------
-  let hasNextPage: boolean;
-  let hasPrevPage: boolean;
-  let displayPage: number;
-
-  if (allView) {
-    hasNextPage = hasNextLib(allViewState, allEntriesQuery.nextCursors);
-    hasPrevPage = hasPrevLib(allViewState);
-    displayPage = page;
-  } else {
-    hasNextPage = pagination.nextCursor != null;
-    hasPrevPage = page > 1 && singleAnchor != null && pagination.prevCursor != null;
-    displayPage = page;
-  }
+  const hasNextPage = pagination.nextCursor != null;
+  const hasPrevPage = page > 1 && pagination.prevCursor != null;
+  const displayPage = page;
 
   const labelFieldIds = new Map(schemas.map((schema) => [schema.name, schemaLabelField(schema)]));
   const schemaNotFound =
@@ -497,32 +431,16 @@ export default function ContentPage() {
   }
 
   function goToNextPage() {
-    if (allView) {
-      if (!hasNextPage) return;
-      navigateToPage(
-        page + 1,
-        advance(allViewState, allEntriesQuery.nextCursors),
-      );
-    } else {
-      if (!hasNextPage || pagination.nextCursor == null) return;
-      navigateToPage(page + 1, { cursor: pagination.nextCursor, direction: "forward" });
-    }
+    if (!hasNextPage || pagination.nextCursor == null) return;
+    navigateToPage(page + 1, { cursor: pagination.nextCursor, direction: "forward" });
   }
 
   function goToPrevPage() {
-    if (allView) {
-      if (!hasPrevPage) return;
-      navigateToPage(
-        page - 1,
-        page - 1 === 1 ? undefined : retreat(allViewState, allEntriesQuery.prevCursors),
-      );
-    } else {
-      if (!hasPrevPage || pagination.prevCursor == null) return;
-      navigateToPage(
-        page - 1,
-        page - 1 === 1 ? undefined : { cursor: pagination.prevCursor, direction: "backward" },
-      );
-    }
+    if (!hasPrevPage || pagination.prevCursor == null) return;
+    navigateToPage(
+      page - 1,
+      page - 1 === 1 ? undefined : { cursor: pagination.prevCursor, direction: "backward" },
+    );
   }
 
   if (schemaNotFound) {

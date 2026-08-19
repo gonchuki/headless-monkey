@@ -94,12 +94,15 @@ export function useRealtime({ schemas, enabled = true, includeEntries = true }: 
       switch (event.type) {
         case "schema.created":
           queryClient.invalidateQueries({ queryKey: queryKeys.schemas() });
+          // Adding a schema changes the global all-schemas listing.
+          queryClient.invalidateQueries({ queryKey: queryKeys.allEntries() });
           showRealtimeToast(event);
           break;
         case "schema.updated":
           queryClient.invalidateQueries({ queryKey: queryKeys.schemas() });
           queryClient.invalidateQueries({ queryKey: queryKeys.schema(event.schema) });
           queryClient.invalidateQueries({ queryKey: queryKeys.entries(event.schema) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.allEntries() });
           showRealtimeToast(event);
           break;
         case "schema.deleted":
@@ -111,6 +114,8 @@ export function useRealtime({ schemas, enabled = true, includeEntries = true }: 
             return next;
           });
           queryClient.invalidateQueries({ queryKey: queryKeys.schemas() });
+          // Removing a schema changes the global all-schemas listing.
+          queryClient.invalidateQueries({ queryKey: queryKeys.allEntries() });
           showRealtimeToast(event);
           break;
         case "entry.created":
@@ -118,6 +123,7 @@ export function useRealtime({ schemas, enabled = true, includeEntries = true }: 
         case "entry.deleted":
           if (!includeEntries) return;
           queryClient.invalidateQueries({ queryKey: queryKeys.entries(event.schema) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.allEntries() });
           showRealtimeToast(event);
           break;
       }
